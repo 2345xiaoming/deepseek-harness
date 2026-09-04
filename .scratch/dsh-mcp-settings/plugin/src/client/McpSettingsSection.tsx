@@ -83,6 +83,67 @@ const primaryButtonStyle: CSSProperties = { padding: '6px 14px', borderRadius: 6
 const ghostButtonStyle: CSSProperties = { padding: '4px 10px', borderRadius: 6, border: '1px solid var(--color-border, #444)', background: 'transparent', color: 'inherit', cursor: 'pointer', fontSize: 12 }
 const errorStyle: CSSProperties = { color: 'var(--color-danger, #e5534b)', fontSize: 12, marginTop: 8, whiteSpace: 'pre-wrap' }
 
+/**
+ * Opencode workspace style switch (v2): rounded-square control 24×16 with a
+ * 12×12 rounded-square thumb sliding 8px; hover grows the thumb. Scoped CSS
+ * carries the :hover / [data-checked] transitions inline styles cannot.
+ */
+const SWITCH_CSS = `
+.dsh-mcp-switch {
+  position: relative; display: inline-flex; align-items: center; padding: 0; border: none;
+  background: transparent; cursor: default;
+}
+.dsh-mcp-switch [data-slot="mcp-switch-control"] {
+  box-sizing: border-box; display: inline-flex; justify-content: flex-start; align-items: center;
+  padding: 2px; width: 24px; height: 16px; flex-shrink: 0; border-radius: 4px; border: none;
+  background: linear-gradient(180deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.16) 100%), var(--color-bg-layer, #3d4148);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.25);
+  transition: background 90ms ease-out, opacity 90ms ease-out, outline-color 90ms ease-out;
+}
+.dsh-mcp-switch [data-slot="mcp-switch-thumb"] {
+  box-sizing: border-box; width: 12px; height: 12px; transform: translateX(0); border-radius: 2px;
+  border: 0.5px solid rgba(0,0,0,0.35);
+  background: linear-gradient(180deg, #ffffff 0%, #d9d9d9 100%), #d9d9d9;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.35);
+  transition: transform 90ms ease-out, width 90ms ease-out, border-radius 90ms, background 90ms;
+}
+.dsh-mcp-switch:hover .dsh-mcp-switch-thumb { width: 13px; border-radius: 3px; }
+.dsh-mcp-switch [data-slot="mcp-switch-control"]:focus-visible { outline: 2px solid var(--color-accent, #2f6feb); outline-offset: 1px; }
+.dsh-mcp-switch[data-checked] [data-slot="mcp-switch-control"] {
+  background: linear-gradient(180deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.1) 100%), var(--color-accent, #2f6feb);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.18);
+}
+.dsh-mcp-switch[data-checked] [data-slot="mcp-switch-thumb"] {
+  transform: translateX(8px); border-radius: 2px;
+  background: linear-gradient(180deg, #ffffff 0%, #c4c4c4 100%), #c4c4c4;
+}
+.dsh-mcp-switch[data-checked]:hover .dsh-mcp-switch-thumb { transform: translateX(7px); }
+`
+
+/** Opencode-style enable/disable switch. */
+function ToggleSwitch({ checked, onChange, ariaLabel }: {
+  checked: boolean
+  onChange: (next: boolean) => void
+  ariaLabel: string
+}): ReactNode {
+  return (
+    <span className="dsh-mcp-switch" data-checked={checked || undefined}>
+      <span
+        role="switch"
+        aria-checked={checked}
+        aria-label={ariaLabel}
+        tabIndex={0}
+        data-slot="mcp-switch-control"
+        style={{ cursor: 'pointer' }}
+        onClick={() => onChange(!checked)}
+        onKeyDown={event => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); onChange(!checked) } }}
+      >
+        <span data-slot="mcp-switch-thumb" className="dsh-mcp-switch-thumb" />
+      </span>
+    </span>
+  )
+}
+
 interface DraftState {
   transport: McpTransport
   command: string
@@ -198,6 +259,7 @@ export function McpSettingsSection({
   }
 
   return <div style={{ padding: '4px 2px' }}>
+    <style>{SWITCH_CSS}</style>
     <h2 style={{ fontSize: 15, margin: '8px 0 2px' }}>{t('title')}</h2>
     <p style={hintStyle}>{t('subtitle')}</p>
 
@@ -214,9 +276,10 @@ export function McpSettingsSection({
           {value.enabled === false
             ? <span style={{ fontSize: 12, opacity: 0.6 }}>{t('disabledTag')}</span>
             : <span style={{ fontSize: 12, opacity: 0.6 }}>{value.transport === 'stdio' ? 'stdio' : 'http'}</span>}
-          <button type="button" style={ghostButtonStyle} onClick={() => {
-            void run(() => toggleServer(serverName, value.enabled === false))
-          }}>{value.enabled === false ? t('enabled') : t('disabledTag')}</button>
+          <ToggleSwitch
+            checked={value.enabled !== false}
+            onChange={next => { void run(() => toggleServer(serverName, next)) }}
+            ariaLabel={`${serverName}: ${value.enabled !== false ? t('disableAction') : t('enableAction')}`} />
           <button type="button" style={ghostButtonStyle} onClick={() => openEdit(serverName)}>{t('edit')}</button>
           {confirmDelete === serverName
             ? <>
@@ -239,9 +302,19 @@ export function McpSettingsSection({
             status={row.enabled ? { enabled: true, toolCount: row.toolCount } : { enabled: false, toolCount: 0 }}
             enabled={row.enabled}
             t={t} />
-          <button type="button" style={ghostButtonStyle} onClick={() => {
-            void run(() => toggleConfigRow(row.serverName, !row.enabled))
-          }}>{row.enabled ? t('disabledTag') : t('enabled')}</button>
+          <ToggleSwitch
+            checked={row.enabled}
+            onChange={next => {
+              // Optimistic flip: the 3s status poll reconciles; without it a
+              // click before the poll lands reads the stale state and repeats
+              // the same action.
+              setStatuses(prev => ({
+                ...prev,
+                configRows: prev.configRows.map(r => r.serverName === row.serverName ? { ...r, enabled: next } : r),
+              }))
+              void run(() => toggleConfigRow(row.serverName, next))
+            }}
+            ariaLabel={`${row.serverName}: ${row.enabled ? t('disableAction') : t('enableAction')}`} />
         </div>
       ))}
     </div>}
