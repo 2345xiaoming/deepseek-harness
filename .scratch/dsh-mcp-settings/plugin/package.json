@@ -1,0 +1,59 @@
+{
+  "name": "@dsh-external/dsh-mcp-settings",
+  "version": "0.0.1",
+  "description": "设置页 MCP section：增删改开关 MCP 服务器，免重启即时挂载",
+  "private": true,
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/types/index.d.ts",
+  "files": [
+    "lib"
+  ],
+  "license": "BSD-3-Clause",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.0-rc <5",
+    "@deepseek-ai/schemastery": "^3.18.0",
+    "@deepseek-ai/dsh-settings": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-mcp-client": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-host-webserver": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-client-ui-settings": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-client-locale": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-client-ui-renderer": ">=0.0.1-rc <2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.9.0",
+    "tsdown": "^0.22.14"
+  },
+  "scripts": {
+    "build": "bash scripts/build.sh",
+    "typecheck": "tsc -p tsconfig.host.json --noEmit && tsc -p tsconfig.client.json",
+    "build:client": "tsdown",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
+  }
+}
