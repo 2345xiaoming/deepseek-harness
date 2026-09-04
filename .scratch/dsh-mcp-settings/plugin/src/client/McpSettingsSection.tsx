@@ -2,7 +2,13 @@ import { useEffect, useState, useSyncExternalStore, type CSSProperties, type For
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { McpLocaleKey } from './locales.ts'
-import { SERVER_NAME_PATTERN, type McpServerEntryWire, type McpServersSectionWire, type McpServerStatusWire, type McpTransport } from '../wire.ts'
+import { SERVER_NAME_PATTERN, type McpConfigRowStatusWire, type McpServerEntryWire, type McpServersSectionWire, type McpServerStatusWire, type McpTransport } from '../wire.ts'
+
+/** Host status view consumed by the section. */
+export interface McpStatusView {
+  servers: Record<string, McpServerStatusWire>
+  configRows: McpConfigRowStatusWire[]
+}
 
 /** Registration-side face: mirror reads plus granular, path-addressed writes. */
 export interface McpSettingsSectionInjected {
@@ -18,8 +24,10 @@ export interface McpSettingsSectionInjected {
   toggleServer: (name: string, enabled: boolean) => Promise<void>
   /** Remove one server entirely. */
   removeServer: (name: string) => Promise<void>
-  /** Read the Host status projection (badges). */
-  fetchStatus: () => Promise<Record<string, McpServerStatusWire>>
+  /** Read the Host status projection (badges + config rows). */
+  fetchStatus: () => Promise<McpStatusView>
+  /** Toggle one patch-configured (loader) mcp-client row. */
+  toggleConfigRow: (serverName: string, enabled: boolean) => Promise<void>
 }
 
 /** Full component props assembled by the Settings slot renderer. */
@@ -91,10 +99,10 @@ const emptyDraft: DraftState = { transport: 'stdio', command: '', args: '', cwd:
 function blankDraft(): DraftState { return { ...emptyDraft } }
 
 export function McpSettingsSection({
-  getSnapshot, subscribe, addServer, patchServer, toggleServer, removeServer, fetchStatus, t,
+  getSnapshot, subscribe, addServer, patchServer, toggleServer, removeServer, fetchStatus, toggleConfigRow, t,
 }: McpSettingsSectionProps): ReactNode {
   const snapshot = useSyncExternalStore(subscribe, getSnapshot)
-  const [statuses, setStatuses] = useState<Record<string, McpServerStatusWire>>({})
+  const [statuses, setStatuses] = useState<McpStatusView>({ servers: {}, configRows: [] })
   const [open, setOpen] = useState(false)
   const [editName, setEditName] = useState<string | undefined>(undefined)
   const [name, setName] = useState('')
@@ -202,7 +210,7 @@ export function McpSettingsSection({
             flex: 1, opacity: 0.75, fontFamily: 'var(--font-mono, monospace)', fontSize: 12,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>{describeEntry(value)}</span>
-          <StatusBadge status={statuses[serverName]} enabled={value.enabled !== false} t={t} />
+          <StatusBadge status={statuses.servers[serverName]} enabled={value.enabled !== false} t={t} />
           {value.enabled === false
             ? <span style={{ fontSize: 12, opacity: 0.6 }}>{t('disabledTag')}</span>
             : <span style={{ fontSize: 12, opacity: 0.6 }}>{value.transport === 'stdio' ? 'stdio' : 'http'}</span>}
@@ -219,6 +227,24 @@ export function McpSettingsSection({
             : <button type="button" style={ghostButtonStyle} onClick={() => setConfirmDelete(serverName)}>{t('delete')}</button>}
         </div>
       ))}</div>}
+
+    {statuses.configRows.length > 0 && <div style={{ marginTop: 10 }}>
+      <p style={{ fontSize: 12, opacity: 0.6, margin: '6px 0' }}>{t('configRowsTitle')}</p>
+      {statuses.configRows.map(row => (
+        <div key={row.serverName} style={rowStyle}>
+          <span style={{ fontWeight: 600 }}>{row.serverName}</span>
+          <span style={{ fontSize: 12, opacity: 0.6 }}>{t('configSourceTag')}</span>
+          <span style={{ flex: 1 }} />
+          <StatusBadge
+            status={row.enabled ? { enabled: true, toolCount: row.toolCount } : { enabled: false, toolCount: 0 }}
+            enabled={row.enabled}
+            t={t} />
+          <button type="button" style={ghostButtonStyle} onClick={() => {
+            void run(() => toggleConfigRow(row.serverName, !row.enabled))
+          }}>{row.enabled ? t('disabledTag') : t('enabled')}</button>
+        </div>
+      ))}
+    </div>}
 
     {open
       ? <form style={{ marginTop: 14, border: '1px solid var(--color-border, #444)', borderRadius: 8, padding: 12 }} onSubmit={event => void submit(event)}>

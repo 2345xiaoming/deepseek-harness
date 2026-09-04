@@ -6,12 +6,13 @@
  */
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-tools'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { SettingsProvider, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
+import type { LoaderEntryFace } from '../src/index.ts'
 import * as McpSettings from '../src/index.ts'
 
 /** The checkout root; the shared stdio MCP fixture server lives under it. */
@@ -46,21 +47,73 @@ export interface Boot {
   ctx: Context
   provider: MemoryProvider
   webServer: WebServer
+  fakeLoader?: FakeLoader
+}
+
+/** Stand-in loader service exposing canned entries; records update calls. */
+export class FakeLoader extends Service {
+  static readonly inject: string[] = []
+
+  readonly updates: Array<{ id: string; options: { disabled: boolean } }> = []
+  private readonly entriesList: LoaderEntryFace[]
+
+  constructor(ctx: Context, config: { entries: LoaderEntryFace[] }) {
+    super(ctx, 'loader')
+    this.entriesList = config.entries
+    for (const entry of this.entriesList) {
+      const original = entry.update
+      const recordedId = entry.id
+      entry.update = async (options: { disabled: boolean }) => {
+        this.updates.push({ id: recordedId, options })
+        if (options.disabled) {
+          entry.options.disabled = true
+          entry.disabled = true
+        } else {
+          delete entry.options.disabled
+          entry.disabled = undefined
+        }
+        await original(options)
+      }
+    }
+  }
+
+  *entries(): Iterable<LoaderEntryFace> {
+    yield* this.entriesList
+  }
+}
+
+/** One loader entry face with a mutable disabled flag. */
+export function entryFace(id: string, name: string, config: Record<string, unknown> | undefined, disabled: boolean): LoaderEntryFace {
+  const face: LoaderEntryFace = {
+    id,
+    options: { name, config, ...disabled ? { disabled: true } : {} },
+    update: async () => { /* replaced by FakeLoader.update */ },
+  }
+  if (disabled) face.disabled = true
+  return face
 }
 
 /** Mounts tools + settings + webserver + the manager plugin; `doc` pre-seeds persisted sections. */
-export async function boot(options: { doc?: Record<string, unknown>; manager?: { statusErrorAfterMs?: number } } = {}): Promise<Boot> {
+export async function boot(options: {
+  doc?: Record<string, unknown>
+  manager?: { statusErrorAfterMs?: number }
+  loaderEntries?: LoaderEntryFace[]
+} = {}): Promise<Boot> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(MemoryProvider, options)
   await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+  if (options.loaderEntries !== undefined) {
+    await ctx.plugin(FakeLoader, { entries: options.loaderEntries })
+  }
   await ctx.plugin(McpSettings, options.manager)
   const provider = ctx.get('settings')
   if (!(provider instanceof MemoryProvider)) throw new Error('settings service is not the MemoryProvider')
   const webServer = ctx.get('webServer')
   if (!(webServer instanceof WebServer)) throw new Error('webServer service is missing')
-  return { ctx, provider, webServer }
+  const fakeLoader = ctx.get('loader') instanceof FakeLoader ? ctx.get('loader') as FakeLoader : undefined
+  return { ctx, provider, webServer, ...fakeLoader === undefined ? {} : { fakeLoader } }
 }
 
 /** Names of every tool in the global layer, as the agent's next request would see them. */

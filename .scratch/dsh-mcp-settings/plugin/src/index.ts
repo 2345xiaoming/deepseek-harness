@@ -15,15 +15,46 @@ import * as McpClient from '@deepseek-ai/dsh-mcp-client'
 import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import { MCP_SERVERS_NAMESPACE, SERVER_NAME_PATTERN, STATUS_PATH, type McpTransport } from './wire.ts'
+import type { IncomingMessage } from 'node:http'
+import { appendFile, mkdir, readFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { MCP_SERVERS_NAMESPACE, SERVER_NAME_PATTERN, STATUS_PATH, TOGGLE_CONFIG_ROW_PATH, type McpTransport } from './wire.ts'
 
-export { MCP_SERVERS_NAMESPACE, SERVER_NAME_PATTERN, STATUS_PATH } from './wire.ts'
+export { MCP_SERVERS_NAMESPACE, SERVER_NAME_PATTERN, STATUS_PATH, TOGGLE_CONFIG_ROW_PATH } from './wire.ts'
 
 /** Cordis plugin name; the injector keys loader rows by the package name. */
 export const name = '@dsh-external/dsh-mcp-settings'
 
-/** Settings consumer; `webServer` serves the status projection; `tools` counts live registrations. */
+/** Settings consumer; `webServer` serves the status projection; `tools` counts live registrations. The loader is read optionally: config rows are a projection, never a startup dependency. */
 export const inject = ['settings', 'tools', 'webServer']
+
+/** Loader row module name for patch-configured mcp-client servers. */
+const MCP_CLIENT_PACKAGE = '@deepseek-ai/dsh-mcp-client'
+
+/** Minimal structural face of a loader entry this plugin touches. */
+export interface LoaderEntryFace {
+  /** Loader entry id (the patch row key). */
+  readonly id: string
+  /** Resolved entry options (module name, config, disabled). */
+  readonly options: {
+    /** Module name of the row (the plugin package). */
+    name?: string
+    /** Whether the entry is disabled at the options level. */
+    disabled?: boolean
+    /** The mcp-client plugin config of the row. */
+    config?: Record<string, unknown>
+  }
+  /** Effective disabled state (includes ancestor-group/expression logic). */
+  readonly disabled?: boolean
+  /** Apply an options patch (disposes/re-applies the fiber transactionally). */
+  update(options: { disabled: boolean }): Promise<void>
+}
+
+/** Minimal structural face of the loader service. */
+export interface LoaderFace {
+  entries(): Iterable<LoaderEntryFace>
+}
 
 /** One server's projected runtime state (never stored in the settings document). */
 export interface McpServerStatus {
@@ -35,9 +66,21 @@ export interface McpServerStatus {
   toolCount: number
 }
 
+/** One patch-configured mcp-client row's projected state. */
+export interface McpConfigRowStatus {
+  /** The mcp-client serverName of the row. */
+  serverName: string
+  /** Whether the loader entry is currently enabled. */
+  enabled: boolean
+  /** Count of live `mcp__<serverName>__*` tools in the global layer. */
+  toolCount: number
+}
+
 /** JSON payload of the status route. */
 export interface McpStatusDocument {
   servers: Record<string, McpServerStatus>
+  /** Patch-configured mcp-client rows (read-only config, toggleable). */
+  configRows: McpConfigRowStatus[]
 }
 
 /** One managed MCP server. Flat object: dict keys and secret fields stay reachable for wire redaction. */
@@ -167,6 +210,62 @@ interface Mount {
   signature: string
 }
 
+/**
+ * Locate the profile's patch file: the include entry's config `path` is the
+ * base cordis.yml of the profile, so the co-located `cordis.patch.yml` is the
+ * user patch layer (the same file `watchUserPatches` applies).
+ */
+function profilePatchPathOf(loader: LoaderFace): string {
+  for (const entry of loader.entries()) {
+    if (entry.id !== 'include') continue
+    const basePath = entry.options.config?.path
+    if (typeof basePath === 'string' && basePath !== '') {
+      // The include carries its base config as a file: URL in the running host.
+      const clean = basePath.startsWith('file:') ? fileURLToPath(basePath) : basePath
+      return join(dirname(clean), 'cordis.patch.yml')
+    }
+  }
+  throw new Error('mcp-settings: cannot locate the profile patch file (include entry has no config path)')
+}
+
+/** Append one id-targeted disabled/enabled patch row for a loader entry. */
+export async function appendPatchRow(patchPath: string, entryId: string, moduleName: string, enabled: boolean): Promise<void> {
+  const row = `\n- id: ${entryId}\n  name: '${moduleName}'\n  disabled: ${String(!enabled)}\n`
+  await mkdir(dirname(patchPath), { recursive: true })
+  let existing = ''
+  try {
+    existing = await readFile(patchPath, 'utf8')
+  } catch {
+    // A missing patch file is created with the row; the loader picks it up on watch.
+  }
+  await appendFile(patchPath, existing.endsWith('\n') ? row : '\n' + row)
+}
+
+/** Read a bounded JSON request body. @throws {TypeError} on invalid JSON or oversized bodies. */
+function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let total = 0
+    req.on('data', (chunk: Buffer) => {
+      total += chunk.length
+      if (total > 64 * 1024) {
+        reject(new TypeError('mcp-settings: request body exceeds 64 KiB'))
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+      } catch {
+        reject(new TypeError('mcp-settings: request body is not valid JSON'))
+      }
+    })
+    req.on('error', reject)
+  })
+}
+
 /** Plugin config: deployment-varying timings the manager needs. */
 export interface Config {
   /** Seconds after mount before a server with zero live tools is reported as starting-failed (still auto-retrying). */
@@ -271,6 +370,30 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     refreshToolCounts()
   }
 
+  function toolCountOf(serverName: string): number {
+    return ctx.tools.schemas().filter(schema => schema.name.startsWith(`mcp__${serverName}__`)).length
+  }
+
+  /** Every loader row mounting an mcp-client instance, with its serverName. */
+  function configRowsOf(): McpConfigRowStatus[] {
+    const loader = ctx.get('loader') as unknown as LoaderFace | undefined
+    if (loader === undefined) return []
+    const rows: McpConfigRowStatus[] = []
+    for (const entry of loader.entries()) {
+      if (entry.options.name !== MCP_CLIENT_PACKAGE) continue
+      const serverName = entry.options.config?.serverName
+      if (typeof serverName !== 'string' || serverName === '') continue
+      const disabled = entry.disabled === true || entry.options.disabled === true
+      rows.push({
+        serverName,
+        enabled: !disabled,
+        toolCount: disabled ? 0 : toolCountOf(serverName),
+      })
+    }
+    rows.sort((a, b) => a.serverName.localeCompare(b.serverName))
+    return rows
+  }
+
   function statusDocument(): McpStatusDocument {
     const servers: Record<string, McpServerStatus> = {}
     for (const [serverName, entry] of Object.entries(source().servers)) {
@@ -281,7 +404,28 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         toolCount: entry.enabled ? (toolCounts.get(serverName) ?? 0) : 0,
       }
     }
-    return { servers }
+    return { servers, configRows: configRowsOf() }
+  }
+
+  /**
+   * Set one config row's disabled flag at runtime and persist an id-targeted
+   * patch row (the loader include re-applies it, surviving restarts).
+   */
+  async function setConfigRowEnabled(serverName: string, enabled: boolean): Promise<void> {
+    const loader = ctx.get('loader') as unknown as LoaderFace | undefined
+    if (loader === undefined) throw new Error('mcp-settings: loader service is unavailable')
+    let target: LoaderEntryFace | undefined
+    for (const entry of loader.entries()) {
+      if (entry.options.name === MCP_CLIENT_PACKAGE && entry.options.config?.serverName === serverName) {
+        target = entry
+        break
+      }
+    }
+    if (target === undefined) throw new Error(`mcp-settings: no patch-configured mcp-client row named "${serverName}"`)
+    await target.update({ disabled: !enabled })
+    const patchPath = profilePatchPathOf(loader)
+    await appendPatchRow(patchPath, target.id, MCP_CLIENT_PACKAGE, enabled)
+    refreshToolCounts()
   }
 
   const enqueueSync = (): void => {
@@ -305,6 +449,29 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       res.end(JSON.stringify(statusDocument()))
     },
   }), 'mcp-settings.status-route')
+
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: TOGGLE_CONFIG_ROW_PATH,
+    handler: (req, res) => {
+      void (async () => {
+        try {
+          const body = await readJsonBody(req)
+          const serverName = (body as { serverName?: unknown }).serverName
+          const enabled = (body as { enabled?: unknown }).enabled
+          if (typeof serverName !== 'string' || typeof enabled !== 'boolean') {
+            throw new TypeError('mcp-settings: toggle body must carry string serverName and boolean enabled')
+          }
+          await setConfigRowEnabled(serverName, enabled)
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+          res.end(JSON.stringify({ ok: true }))
+        } catch (reason) {
+          res.writeHead(400, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+          res.end(JSON.stringify({ ok: false, error: String(reason instanceof Error ? reason.message : reason) }))
+        }
+      })()
+    },
+  }), 'mcp-settings.config-row-toggle')
 
   ctx.effect(async () => async () => {
     disposing = true

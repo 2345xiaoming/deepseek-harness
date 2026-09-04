@@ -10,7 +10,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { McpSettingsSection, type McpSettingsSectionInjected } from './McpSettingsSection.tsx'
 import { en, zh, type McpLocaleKey } from './locales.ts'
-import { MCP_SERVERS_NAMESPACE, STATUS_PATH, decodeMcpServersSection, type McpServersSectionWire, type McpStatusDocumentWire } from '../wire.ts'
+import { MCP_SERVERS_NAMESPACE, STATUS_PATH, TOGGLE_CONFIG_ROW_PATH, decodeMcpServersSection, type McpServersSectionWire, type McpStatusDocumentWire } from '../wire.ts'
 
 export type { McpSettingsSectionInjected, McpSettingsSectionProps } from './McpSettingsSection.tsx'
 export type { McpLocaleKey } from './locales.ts'
@@ -55,7 +55,18 @@ export function apply(ctx: Context): void {
       const response = await fetch(STATUS_PATH, { cache: 'no-store' })
       if (!response.ok) throw new Error(`mcp-settings: status read failed (${response.status})`)
       const document = await response.json() as McpStatusDocumentWire
-      return document.servers
+      return { servers: document.servers, configRows: document.configRows ?? [] }
+    },
+    toggleConfigRow: async (serverName, enabled) => {
+      const response = await fetch(TOGGLE_CONFIG_ROW_PATH, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ serverName, enabled }),
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => undefined) as { error?: string } | undefined
+        throw new Error(body?.error ?? `mcp-settings: toggle failed (${response.status})`)
+      }
     },
   }
 
