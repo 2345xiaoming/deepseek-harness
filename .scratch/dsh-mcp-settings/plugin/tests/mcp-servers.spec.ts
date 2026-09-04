@@ -1,12 +1,15 @@
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { join } from 'node:path'
-import { boot, fixtureServerPath, repoRoot, toolNames } from './helpers.ts'
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { boot, entryFace, fixtureServerPath, repoRoot, toolNames } from './helpers.ts'
 import { mountConfig } from '../src/index.ts'
-import { STATUS_PATH } from '../src/wire.ts'
+import { STATUS_PATH, TOGGLE_CONFIG_ROW_PATH } from '../src/wire.ts'
 import type { McpServersSectionWire } from '../src/wire.ts'
 import { startHttpMcpFixture } from '../../../../packages/mcp/mcp-client/tests/http-fixture.ts'
 
 export const pingFixturePath = join(repoRoot, '.scratch/dsh-mcp-settings/plugin/tests/fixture-ping.ts')
+const MCP_CLIENT_PACKAGE = '@deepseek-ai/dsh-mcp-client'
 
 describe('mcp-servers namespace', () => {
   it('registers a stdio entry tools in the global tool set without restart', async () => {
@@ -233,5 +236,53 @@ describe('mcp-servers namespace', () => {
       const statuses = await readStatus()
       expect(statuses.page?.enabled).toBe(false)
     })
+  })
+
+  it('projects patch-configured mcp-client rows into the status document', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'mcp-settings-profile-'))
+    const include = entryFace('include', '@deepseek-ai/cordis-plugin-include', { path: join(root, 'cordis.yml') }, false)
+    const memory = entryFace('mcp-codebase-memory', MCP_CLIENT_PACKAGE, { serverName: 'codebase-memory' }, false)
+    const context7 = entryFace('mcp-context7', MCP_CLIENT_PACKAGE, { serverName: 'context7' }, true)
+    const { ctx, webServer } = await boot({ loaderEntries: [include, memory, context7] })
+    afterAll(async () => await ctx.dispose())
+
+    const response = await fetch(`http://127.0.0.1:${webServer.port}${STATUS_PATH}`)
+    const document = await response.json() as {
+      configRows: Array<{ serverName: string; enabled: boolean; toolCount: number }>
+    }
+    expect(document.configRows).toContainEqual({ serverName: 'codebase-memory', enabled: true, toolCount: 0 })
+    expect(document.configRows).toContainEqual({ serverName: 'context7', enabled: false, toolCount: 0 })
+  })
+
+  it('toggling a config row updates the loader entry and persists an id-targeted patch row', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'mcp-settings-patch-'))
+    const include = entryFace('include', '@deepseek-ai/cordis-plugin-include', { path: join(root, 'profiles', 'web', 'cordis.yml') }, false)
+    const memory = entryFace('mcp-codebase-memory', MCP_CLIENT_PACKAGE, { serverName: 'codebase-memory' }, false)
+    const { ctx, webServer, fakeLoader } = await boot({ loaderEntries: [include, memory] })
+    afterAll(async () => await ctx.dispose())
+    expect(fakeLoader).toBeDefined()
+
+    const patchPath = join(root, 'profiles', 'web', 'cordis.patch.yml')
+    await mkdir(dirname(patchPath), { recursive: true })
+    await writeFile(patchPath, '# profile patch\n- insert:\n    - id: mcp-codebase-memory\n')
+
+    const disable = await fetch(`http://127.0.0.1:${webServer.port}${TOGGLE_CONFIG_ROW_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ serverName: 'codebase-memory', enabled: false }),
+    })
+    expect(disable.status).toBe(200)
+    expect(fakeLoader!.updates.at(-1)).toEqual({ id: 'mcp-codebase-memory', options: { disabled: true } })
+    const patchAfterDisable = await readFile(patchPath, 'utf8')
+    expect(patchAfterDisable).toContain('disabled: true')
+
+    const enable = await fetch(`http://127.0.0.1:${webServer.port}${TOGGLE_CONFIG_ROW_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ serverName: 'codebase-memory', enabled: true }),
+    })
+    expect(enable.status).toBe(200)
+    expect(fakeLoader!.updates.at(-1)).toEqual({ id: 'mcp-codebase-memory', options: { disabled: false } })
+    expect(await readFile(patchPath, 'utf8')).toContain('disabled: false')
   })
 })

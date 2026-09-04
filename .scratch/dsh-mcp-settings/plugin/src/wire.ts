@@ -12,6 +12,9 @@ export const MCP_SERVERS_NAMESPACE: 'mcp-servers' = 'mcp-servers'
 /** Status route served by the host manager to the settings section. */
 export const STATUS_PATH = '/@dsh-external/dsh-mcp-settings/status'
 
+/** Toggle route for patch-configured (loader) mcp-client rows. */
+export const TOGGLE_CONFIG_ROW_PATH = '/@dsh-external/dsh-mcp-settings/config-rows/toggle'
+
 /** The transports the page manages, mirroring mcp-client's discriminant. */
 export type McpTransport = 'stdio' | 'streamable-http'
 
@@ -56,4 +59,16 @@ export interface McpServerStatusWire {
 /** JSON payload of the Host status route. */
 export interface McpStatusDocumentWire {
   servers: Record<string, McpServerStatusWire>
+  /** Patch-configured mcp-client rows projected from the loader (read-only config, toggleable). */
+  configRows: McpConfigRowStatusWire[]
+}
+
+/** One patch-configured mcp-client row's projected state. */
+export interface McpConfigRowStatusWire {
+  /** The mcp-client serverName of the row. */
+  serverName: string
+  /** Whether the loader entry is currently enabled. */
+  enabled: boolean
+  /** Count of live `mcp__<serverName>__*` tools in the global layer. */
+  toolCount: number
 }

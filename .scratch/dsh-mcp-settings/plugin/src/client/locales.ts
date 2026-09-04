@@ -42,6 +42,8 @@ export const zh = {
   statusConnected: '已连接',
   statusError: '出错',
   statusTools: '个工具',
+  configRowsTitle: '配置文件中的 MCP 服务',
+  configSourceTag: '来自配置',
 } as const
 
 export const en = {
@@ -87,6 +89,8 @@ export const en = {
   statusConnected: 'Connected',
   statusError: 'Error',
   statusTools: 'tools',
+  configRowsTitle: 'MCP servers from config files',
+  configSourceTag: 'from config',
 } as const
 
 export type McpLocaleKey = keyof typeof zh
