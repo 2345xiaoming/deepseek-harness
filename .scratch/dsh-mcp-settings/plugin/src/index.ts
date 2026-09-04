@@ -230,7 +230,11 @@ function profilePatchPathOf(loader: LoaderFace): string {
 
 /** Append one id-targeted disabled/enabled patch row for a loader entry. */
 export async function appendPatchRow(patchPath: string, entryId: string, moduleName: string, enabled: boolean): Promise<void> {
-  const row = `\n- id: ${entryId}\n  name: '${moduleName}'\n  disabled: ${String(!enabled)}\n`
+  // The include applier indexes patch targets by the ROOT-level id the insert
+  // declared ("mcp-context7"); a nested loader id ("include:mcp-context7")
+  // would warn and skip, so the original insert would win on every re-apply.
+  const leafId = entryId.slice(entryId.lastIndexOf(':') + 1)
+  const row = `\n- id: ${leafId}\n  name: '${moduleName}'\n  disabled: ${String(!enabled)}\n`
   await mkdir(dirname(patchPath), { recursive: true })
   let existing = ''
   try {

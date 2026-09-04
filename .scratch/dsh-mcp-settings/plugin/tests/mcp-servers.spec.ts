@@ -257,7 +257,9 @@ describe('mcp-servers namespace', () => {
   it('toggling a config row updates the loader entry and persists an id-targeted patch row', async () => {
     const root = await mkdtemp(join(tmpdir(), 'mcp-settings-patch-'))
     const include = entryFace('include', '@deepseek-ai/cordis-plugin-include', { path: join(root, 'profiles', 'web', 'cordis.yml') }, false)
-    const memory = entryFace('mcp-codebase-memory', MCP_CLIENT_PACKAGE, { serverName: 'codebase-memory' }, false)
+    // Nested loader ids are the production reality: the persisted patch row
+    // must still target the ROOT-level id the insert declared.
+    const memory = entryFace('include:mcp-codebase-memory', MCP_CLIENT_PACKAGE, { serverName: 'codebase-memory' }, false)
     const { ctx, webServer, fakeLoader } = await boot({ loaderEntries: [include, memory] })
     afterAll(async () => await ctx.dispose())
     expect(fakeLoader).toBeDefined()
@@ -272,8 +274,11 @@ describe('mcp-servers namespace', () => {
       body: JSON.stringify({ serverName: 'codebase-memory', enabled: false }),
     })
     expect(disable.status).toBe(200)
-    expect(fakeLoader!.updates.at(-1)).toEqual({ id: 'mcp-codebase-memory', options: { disabled: true } })
+    expect(fakeLoader!.updates.at(-1)).toEqual({ id: 'include:mcp-codebase-memory', options: { disabled: true } })
     const patchAfterDisable = await readFile(patchPath, 'utf8')
+    // The leaf id is what the include applier can resolve.
+    expect(patchAfterDisable).toContain('- id: mcp-codebase-memory')
+    expect(patchAfterDisable).not.toContain('id: include:mcp-codebase-memory')
     expect(patchAfterDisable).toContain('disabled: true')
 
     const enable = await fetch(`http://127.0.0.1:${webServer.port}${TOGGLE_CONFIG_ROW_PATH}`, {
@@ -282,7 +287,7 @@ describe('mcp-servers namespace', () => {
       body: JSON.stringify({ serverName: 'codebase-memory', enabled: true }),
     })
     expect(enable.status).toBe(200)
-    expect(fakeLoader!.updates.at(-1)).toEqual({ id: 'mcp-codebase-memory', options: { disabled: false } })
+    expect(fakeLoader!.updates.at(-1)).toEqual({ id: 'include:mcp-codebase-memory', options: { disabled: false } })
     expect(await readFile(patchPath, 'utf8')).toContain('disabled: false')
   })
 })
