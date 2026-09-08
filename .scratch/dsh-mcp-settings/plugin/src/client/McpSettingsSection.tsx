@@ -84,62 +84,61 @@ const ghostButtonStyle: CSSProperties = { padding: '4px 10px', borderRadius: 6, 
 const errorStyle: CSSProperties = { color: 'var(--color-danger, #e5534b)', fontSize: 12, marginTop: 8, whiteSpace: 'pre-wrap' }
 
 /**
- * Opencode workspace style switch (v2): rounded-square control 24×16 with a
- * 12×12 rounded-square thumb sliding 8px; hover grows the thumb. Scoped CSS
- * carries the :hover / [data-checked] transitions inline styles cannot.
+ * Modern pill switch matching the harness design system (the Subagent model
+ * selection card's switch): 36×20 track, 10px radius, 16px round thumb, and
+ * semantic `--dsw-alias-*` tokens so light and dark themes both resolve.
+ * Refinements over the house baseline: a 160ms ease-out-quad slide, a subtle
+ * thumb elevation shadow, and a press-stretch micro-interaction.
  */
 const SWITCH_CSS = `
-.dsh-mcp-switch {
-  position: relative; display: inline-flex; align-items: center; padding: 0; border: none;
-  background: transparent; cursor: default;
+.dsh-mcp-switch { display: inline-flex; align-items: center; }
+.dsh-mcp-switch-control {
+  box-sizing: border-box; position: relative; flex: 0 0 auto;
+  width: 36px; height: 20px; padding: 2px; border: 0; border-radius: 10px;
+  background: var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.12));
+  cursor: pointer;
+  transition: background-color 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.dsh-mcp-switch [data-slot="mcp-switch-control"] {
-  box-sizing: border-box; display: inline-flex; justify-content: flex-start; align-items: center;
-  padding: 2px; width: 24px; height: 16px; flex-shrink: 0; border-radius: 4px; border: none;
-  background: linear-gradient(180deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.16) 100%), var(--color-bg-layer, #3d4148);
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.25);
-  transition: background 90ms ease-out, opacity 90ms ease-out, outline-color 90ms ease-out;
+.dsh-mcp-switch-control:hover {
+  background: color-mix(in srgb, var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.12)) 78%, var(--dsw-alias-label-primary, #111) 22%);
 }
-.dsh-mcp-switch [data-slot="mcp-switch-thumb"] {
-  box-sizing: border-box; width: 12px; height: 12px; transform: translateX(0); border-radius: 2px;
-  border: 0.5px solid rgba(0,0,0,0.35);
-  background: linear-gradient(180deg, #ffffff 0%, #d9d9d9 100%), #d9d9d9;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.35);
-  transition: transform 90ms ease-out, width 90ms ease-out, border-radius 90ms, background 90ms;
+.dsh-mcp-switch-control:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #111); outline-offset: 2px; }
+.dsh-mcp-switch-control:disabled { cursor: default; opacity: 0.5; }
+.dsh-mcp-switch-thumb {
+  display: block; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--dsw-alias-label-primary-foreground, #fff);
+  box-shadow: 0 1px 2px var(--dsw-alias-bg-mask-2, rgba(0, 0, 0, 0.12));
+  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1), width 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.dsh-mcp-switch:hover .dsh-mcp-switch-thumb { width: 13px; border-radius: 3px; }
-.dsh-mcp-switch [data-slot="mcp-switch-control"]:focus-visible { outline: 2px solid var(--color-accent, #2f6feb); outline-offset: 1px; }
-.dsh-mcp-switch[data-checked] [data-slot="mcp-switch-control"] {
-  background: linear-gradient(180deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.1) 100%), var(--color-accent, #2f6feb);
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.18);
+.dsh-mcp-switch[data-checked] .dsh-mcp-switch-control { background: var(--dsw-alias-brand-primary, #111); }
+.dsh-mcp-switch[data-checked] .dsh-mcp-switch-control:hover {
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary, #111) 88%, var(--dsw-alias-label-primary-foreground, #fff) 12%);
 }
-.dsh-mcp-switch[data-checked] [data-slot="mcp-switch-thumb"] {
-  transform: translateX(8px); border-radius: 2px;
-  background: linear-gradient(180deg, #ffffff 0%, #c4c4c4 100%), #c4c4c4;
-}
-.dsh-mcp-switch[data-checked]:hover .dsh-mcp-switch-thumb { transform: translateX(7px); }
+.dsh-mcp-switch[data-checked] .dsh-mcp-switch-thumb { transform: translateX(16px); }
+.dsh-mcp-switch-control:active .dsh-mcp-switch-thumb { width: 18px; }
+.dsh-mcp-switch[data-checked] .dsh-mcp-switch-control:active .dsh-mcp-switch-thumb { transform: translateX(14px); }
 `
 
-/** Opencode-style enable/disable switch. */
-function ToggleSwitch({ checked, onChange, ariaLabel }: {
+/** Modern pill switch with the harness design-system tokens. */
+function ToggleSwitch({ checked, onChange, ariaLabel, disabled }: {
   checked: boolean
   onChange: (next: boolean) => void
   ariaLabel: string
+  disabled?: boolean
 }): ReactNode {
   return (
     <span className="dsh-mcp-switch" data-checked={checked || undefined}>
-      <span
+      <button
+        type="button"
         role="switch"
         aria-checked={checked}
         aria-label={ariaLabel}
-        tabIndex={0}
-        data-slot="mcp-switch-control"
-        style={{ cursor: 'pointer' }}
+        className="dsh-mcp-switch-control"
+        disabled={disabled}
         onClick={() => onChange(!checked)}
-        onKeyDown={event => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); onChange(!checked) } }}
       >
-        <span data-slot="mcp-switch-thumb" className="dsh-mcp-switch-thumb" />
-      </span>
+        <span className="dsh-mcp-switch-thumb" />
+      </button>
     </span>
   )
 }
@@ -279,6 +278,7 @@ export function McpSettingsSection({
           <ToggleSwitch
             checked={value.enabled !== false}
             onChange={next => { void run(() => toggleServer(serverName, next)) }}
+            disabled={busy}
             ariaLabel={`${serverName}: ${value.enabled !== false ? t('disableAction') : t('enableAction')}`} />
           <button type="button" style={ghostButtonStyle} onClick={() => openEdit(serverName)}>{t('edit')}</button>
           {confirmDelete === serverName
@@ -314,6 +314,7 @@ export function McpSettingsSection({
               }))
               void run(() => toggleConfigRow(row.serverName, next))
             }}
+            disabled={busy}
             ariaLabel={`${row.serverName}: ${row.enabled ? t('disableAction') : t('enableAction')}`} />
         </div>
       ))}
