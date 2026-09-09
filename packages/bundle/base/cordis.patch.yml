@@ -453,6 +453,14 @@
         fetch: true
         searchTimeoutMs: 60000
 
+    # Browser automation for agents (browser_snapshot/goto/click/js/... + browser_run
+    # escape hatch). Chrome boots lazily on first real browser call, so mounting this
+    # row costs nothing until a browser tool actually runs.
+    - id: ego-browser
+      name: '@deepseek-ai/dsh-ego-browser'
+      config:
+        enabled: true
+
     # ── rows every mode mounts, whose values each overlay may state ──────────────
 
     # The tool registry. Presentation mode is a deployment choice; omitting it here

@@ -95,6 +95,8 @@ Run checks before pushes via [dsh-pre-push-checks](.agents/skills/dsh-pre-push-c
 - Never default to the full suite or repeat a passing check for commit or push. CI owns exhaustive coverage and the platform matrix; rehearse all locally only by explicit request, for CI diagnosis, or for an irreducibly repository-wide change.
 - `test:coverage`, not `test`, is the CI coverage gate ([why](docs/testing.md)).
 
+- **Library/API docs:** use Context7 MCP (`mcp__context7__resolve-library-id`, `mcp__context7__query-docs`); bridge: [packages/mcp/mcp-client/README.md](packages/mcp/mcp-client/README.md).
+
 ## Secrets / .env
 
 Real-API tests and demos read `DEEPSEEK_API_KEY`, optional `DEEPSEEK_BASE_URL`, and root `.env`. cordis.yml allows `!!js` (never `!js`) under plugin `config` and entry `disabled`; other metadata stays literal, so conditional composition also uses overlays ([primer](docs/cordis-primer.md#loader-configuration)). Never commit credentials. CI e2e skips without a key; [testing.md](docs/testing.md) owns key policy.

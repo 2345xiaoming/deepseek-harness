@@ -308,6 +308,19 @@
       ]
     },
     {
+      // ego-browser is a ported upstream codebase (v2.0.0-beta.4, strict:false):
+      // its files keep the upstream @ts-nocheck marker and loose CDP payload
+      // types until the port is hardened against the repository strict profile.
+      "files": [
+        "packages/web/ego-browser/**/*.{ts,tsx}"
+      ],
+      "rules": {
+        "typescript/ban-ts-comment": "off",
+        "typescript/no-explicit-any": "off",
+        "typescript/no-non-null-assertion": "off"
+      }
+    },
+    {
       // The project-free staged profile re-includes this syntax-coverage fixture.
       "files": [
         "packages/typert/generator/tests/fixtures/type-model/**/*.{ts,tsx}"

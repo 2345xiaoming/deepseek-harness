@@ -1,0 +1,7 @@
+# dsh-ego-browser bundle 层：插入浏览器自动化引导行。
+# 装配走官方 bundle patch（dsh.bundle.patch），把 ego-browser 插件插入 profile。
+# config 为空对象即全部用默认配置（默认启用 browser_* 工具；懒启动 Chrome）。
+- insert:
+    - id: ego-browser
+      name: '@deepseek-ai/dsh-ego-browser'
+      config: {}
