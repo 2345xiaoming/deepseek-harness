@@ -26,14 +26,14 @@ export interface EgoBridge {
   listTabs(): Promise<{ tabs: Array<{ targetId: string; title?: string; url?: string; active?: boolean; index?: number }> }>
   createTab(url?: string): Promise<{ targetId: string }>
   snapshot(options?: unknown): Promise<{ content: string; refs: unknown[] }>
-  /* v2 task-space host surface: one synthetic agent-owned space over the
-   * local Chrome, so the ported harness's task-space helpers (taskSpace(),
+  /* v2 task-space host surface: a registry of logical spaces over the local
+   * Chrome, so the ported harness's task-space helpers (taskSpace(),
    * newTaskSpace(), claimTaskSpace(), …) resolve without an ego-lite host. */
   listTaskSpaces?(): Promise<{ taskSpaces: Array<Record<string, unknown>> }>
   listProfiles?(): Promise<{ profiles: Array<{ id: string; name: string; isDefault: boolean }> }>
-  createTaskSpace?(name: string): Promise<Record<string, unknown>>
+  createTaskSpace?(name: string, profileId?: string): Promise<Record<string, unknown>>
   useTaskSpace?(id: number): Promise<unknown>
-  claimTaskSpace?(id: number, name: string): Promise<Record<string, unknown>>
+  claimTaskSpace?(id?: number, name?: string): Promise<Record<string, unknown>>
   completeTaskSpace?(): Promise<unknown>
   closeTaskSpace?(): Promise<unknown>
   handOffTaskSpace?(): Promise<unknown>
@@ -263,16 +263,31 @@ export interface InstallEgoBridgeOptions {
 
 /**
  * Task-space shim: the v2 harness drives browsing through a task-space object
- * model (helpers.taskSpace() → Page objects). There is no ego-lite host here,
- * so the bridge presents one synthetic agent-owned space backed by the single
- * local Chrome instance. All state-changing host calls are idempotent no-ops.
+ * model (helpers.taskSpace() → Page objects). There is no ego-lite host here, so
+ * the bridge keeps a logical registry over the single local Chrome instance:
+ * every space resolves to the same browser, and only its name, id, profile, and
+ * ownership differ. Calls with no counterpart here (overlay dismissal, mouse
+ * animation) stay no-ops.
+ *
+ * The registry belongs to one installed bridge, so unloading the plugin drops
+ * its spaces together with the Chrome instance they described.
  */
-function syntheticTaskSpace(): Record<string, unknown> {
-  const name = process.env.EGO_BROWSER_NAME || 'default'
-  return { taskId: 1, id: 1, name, ownership: 'agent', recentTabTitles: [] }
+interface ShimTaskSpace {
+  taskId: number
+  id: number
+  name: string
+  createdBy: string
+  ownership: string
+  profileId?: string
+  recentTabTitles: string[]
 }
 
-function bridgeTaskSpaceSurface(): Pick<
+/** A caller mutating a returned descriptor must not rewrite registry state. */
+function cloneShimTaskSpace(space: ShimTaskSpace): Record<string, unknown> {
+  return { ...space, recentTabTitles: [...space.recentTabTitles] }
+}
+
+function createTaskSpaceShim(): Pick<
   EgoBridge,
   | 'listTaskSpaces'
   | 'listProfiles'
@@ -286,21 +301,110 @@ function bridgeTaskSpaceSurface(): Pick<
   | 'animationHighlightMouseToPosition'
   | 'setAgentTaskState'
 > {
+  const spaces = new Map<number, ShimTaskSpace>()
+  let nextId = 0
+  let currentId: number | undefined
+
+  const defaultName = (): string => process.env.EGO_BROWSER_NAME || 'default'
+
+  /**
+   * The seed space exists so a fresh bridge answers taskSpace()/listTaskSpaces()
+   * without a create call, and so the default name resolves. Seeding only from an
+   * empty registry lets closing every space leave the list empty until the next
+   * create, instead of resurrecting a closed id.
+   */
+  const seedIfEmpty = (): void => {
+    if (spaces.size > 0) return
+    const id = ++nextId
+    spaces.set(id, {
+      taskId: id,
+      id,
+      name: defaultName(),
+      createdBy: 'agent',
+      ownership: 'agent',
+      recentTabTitles: [],
+    })
+    currentId = id
+  }
+
+  const first = (): ShimTaskSpace => {
+    seedIfEmpty()
+    return spaces.values().next().value as ShimTaskSpace
+  }
+
+  const find = (id?: number, name?: string): ShimTaskSpace | undefined => {
+    if (typeof id === 'number' && spaces.has(id)) return spaces.get(id)
+    if (typeof name === 'string' && name) {
+      for (const space of spaces.values()) {
+        if (space.name === name) return space
+      }
+    }
+    return undefined
+  }
+
+  const current = (): ShimTaskSpace => {
+    const selected = currentId === undefined ? undefined : spaces.get(currentId)
+    return selected ?? first()
+  }
+
   return {
-    listTaskSpaces: async () => ({ taskSpaces: [syntheticTaskSpace()] }),
+    listTaskSpaces: async () => {
+      seedIfEmpty()
+      return { taskSpaces: [...spaces.values()].map(cloneShimTaskSpace) }
+    },
     listProfiles: async () => ({
       profiles: [{ id: 'default', name: 'default', isDefault: true }],
     }),
-    createTaskSpace: async (name: string) => ({
-      ...syntheticTaskSpace(),
-      name: name || (syntheticTaskSpace().name as string),
-    }),
-    useTaskSpace: async () => undefined,
-    claimTaskSpace: async () => syntheticTaskSpace(),
+    // Re-creating an existing name returns that space instead of adding a second
+    // one with the same name, which would make name-based lookup ambiguous.
+    createTaskSpace: async (name: string, profileId?: string) => {
+      const requested = name || defaultName()
+      let space = find(undefined, requested)
+      if (!space) {
+        const id = ++nextId
+        space = {
+          taskId: id,
+          id,
+          name: requested,
+          createdBy: 'agent',
+          ownership: 'agent',
+          recentTabTitles: [],
+        }
+        spaces.set(id, space)
+      }
+      if (profileId !== undefined) space.profileId = profileId
+      currentId = space.id
+      return cloneShimTaskSpace(space)
+    },
+    useTaskSpace: async (id: number) => {
+      if (!spaces.has(id)) {
+        throw new Error(`unknown task space id: ${id}`)
+      }
+      currentId = id
+    },
+    claimTaskSpace: async (id?: number, name?: string) => {
+      const space = find(id, name) ?? current()
+      space.ownership = 'agent'
+      space.createdBy = 'agent'
+      currentId = space.id
+      return cloneShimTaskSpace(space)
+    },
+    // completeTaskSpace dismisses the agent overlay; the space itself stays.
     completeTaskSpace: async () => ({ done: true }),
-    closeTaskSpace: async () => undefined,
-    handOffTaskSpace: async () => ({ done: true }),
-    takeOverTaskSpace: async () => syntheticTaskSpace(),
+    closeTaskSpace: async () => {
+      const space = current()
+      spaces.delete(space.id)
+      currentId = spaces.keys().next().value
+    },
+    handOffTaskSpace: async () => {
+      current().ownership = 'agentDelegatedToUser'
+      return { done: true }
+    },
+    takeOverTaskSpace: async () => {
+      const space = current()
+      space.ownership = 'agent'
+      return cloneShimTaskSpace(space)
+    },
     animationHighlightMouseToPosition: () => undefined,
     setAgentTaskState: () => undefined,
   }
@@ -318,7 +422,7 @@ export function installEgoBridge(options: InstallEgoBridgeOptions): () => void {
     onSendCDPMessageError: null,
     listTabs,
     createTab,
-    ...bridgeTaskSpaceSurface(),
+    ...createTaskSpaceShim(),
     snapshot: (opts?: Record<string, unknown>) => options.snapshot(opts).then(s => ({ ...s, refs: s.refs } as never)),
     isAlive,
     dispose: () => options.disposeChrome().then(() => dispose()),
