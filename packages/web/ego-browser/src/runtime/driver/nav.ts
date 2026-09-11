@@ -59,17 +59,35 @@ export async function gotoUrl(url) {
   return cdp('Page.navigate', { url })
 }
 
+/** `Page.navigate` payload fields this driver acts on (see driver/page-waits.ts). */
+type NavigationResult = {
+  errorText?: string
+  isDownload?: boolean
+}
+
 /**
  * Navigate the current tab and wait for load/settle in one call.
+ *
+ * A rejected navigation (DNS failure, refused connection, blocked scheme) still
+ * resolves `Page.navigate` with `errorText` and leaves the tab on Chrome's error
+ * page, so reporting the URL as reached would be false. Mirrors the Page.goto
+ * contract in driver/page-waits.ts.
  * @param {string} url Absolute or browser-supported URL to load.
  * @param {{timeout?: number, settle?: number, wait?: boolean}} [options]
  * @returns {Promise<{navigation: object, loaded: boolean}>}
+ * @throws {Error} When Chrome reports a navigation error or a started download.
  */
 export async function gotoAndWait(
   url: string,
   options: GotoAndWaitOptions = {},
 ) {
-  const navigation = await gotoUrl(url)
+  const navigation = (await gotoUrl(url)) as NavigationResult
+  if (typeof navigation.errorText === 'string') {
+    throw new Error(`gotoAndWait failed for ${url}: ${navigation.errorText}`)
+  }
+  if (navigation.isDownload === true) {
+    throw new Error(`gotoAndWait failed for ${url}: navigation started a download`)
+  }
   const loaded =
     options.wait === false
       ? false
