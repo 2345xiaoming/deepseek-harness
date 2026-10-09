@@ -1,13 +1,18 @@
 /**
- * Wire-level shapes of the `mcp-servers` settings namespace, shared by the
- * host half (its source of truth) and the client half (the settings section
- * form). The client bundle never imports the host module; both import this
- * file. env/headers values are wire-redacted secrets: the namespace's
- * `describe` response omits them and lists their paths in `secrets`.
+ * Wire-level shapes of the manager's settings section, shared by the host half
+ * (its source of truth) and the client half (the settings section form). The
+ * client bundle never imports the host module; both import this file.
+ * env/headers values are wire-redacted secrets: the entry's `describe`
+ * response omits them and lists their paths in `secrets`.
  */
 
-/** Settings namespace owned by this feature; registered by the host manager. */
-export const MCP_SERVERS_NAMESPACE: 'mcp-servers' = 'mcp-servers'
+/**
+ * Settings namespace = the plugin's own loader entry id, whose
+ * `config.servers` volatile field is the sole source of truth. Spelled in both
+ * halves: the client bundle must not import the host module, and the id is
+ * declared by this plugin's own bundle patch.
+ */
+export const MCP_SETTINGS_ENTRY = 'dsh-mcp-settings'
 
 /** Status route served by the host manager to the settings section. */
 export const STATUS_PATH = '/@dsh-external/dsh-mcp-settings/status'

@@ -2,21 +2,21 @@ import { afterAll, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { boot, entryFace, fixtureServerPath, repoRoot, toolNames } from './helpers.ts'
-import { mountConfig } from '../src/index.ts'
-import { STATUS_PATH, TOGGLE_CONFIG_ROW_PATH } from '../src/wire.ts'
-import type { McpServersSectionWire } from '../src/wire.ts'
+import { redactSecrets } from '@deepseek-ai/dsh-settings'
+import { boot, bootWithEntries, entryFace, fixtureServerPath, repoRoot, toolNames } from './helpers.ts'
+import { Config, mountConfig } from '../src/index.ts'
+import { STATUS_PATH, TOGGLE_CONFIG_ROW_PATH, type McpServersSectionWire } from '../src/wire.ts'
 import { startHttpMcpFixture } from '../../../../packages/mcp/mcp-client/tests/http-fixture.ts'
 
 export const pingFixturePath = join(repoRoot, '.scratch/dsh-mcp-settings/plugin/tests/fixture-ping.ts')
 const MCP_CLIENT_PACKAGE = '@deepseek-ai/dsh-mcp-client'
 
-describe('mcp-servers namespace', () => {
+describe('mcp-settings entry config', () => {
   it('registers a stdio entry tools in the global tool set without restart', async () => {
-    const { ctx, provider } = await boot()
+    const { ctx, update } = await boot()
     afterAll(async () => await ctx.dispose())
 
-    await provider.update('mcp-servers', {
+    await update({
       servers: {
         page: { transport: 'stdio', command: process.execPath, args: [fixtureServerPath], cwd: repoRoot },
       },
@@ -31,12 +31,8 @@ describe('mcp-servers namespace', () => {
 
   it('mounts pre-existing enabled entries at boot without any settings write', async () => {
     const { ctx } = await boot({
-      doc: {
-        'mcp-servers': {
-          servers: {
-            page: { transport: 'stdio', command: process.execPath, args: [fixtureServerPath], cwd: repoRoot },
-          },
-        },
+      servers: {
+        page: { transport: 'stdio', command: process.execPath, args: [fixtureServerPath], cwd: repoRoot },
       },
     })
     afterAll(async () => await ctx.dispose())
@@ -46,107 +42,118 @@ describe('mcp-servers namespace', () => {
     }, { timeout: 20_000 })
   })
 
-  it('unregisters the tools when the entry is removed from the namespace', async () => {
-    const { ctx, provider } = await boot()
+  it('unregisters the tools when the entry is removed from the section', async () => {
+    const { ctx, update, replace } = await boot()
     afterAll(async () => await ctx.dispose())
 
-    await provider.update('mcp-servers', {
+    await update({
       servers: { page: { transport: 'stdio', command: process.execPath, args: [fixtureServerPath], cwd: repoRoot } },
     })
     await vi.waitFor(() => expect(toolNames(ctx)).toContain('mcp__page__add'), { timeout: 20_000 })
 
-    await provider.replace('mcp-servers', { servers: {} })
+    await replace({ servers: {} })
     await vi.waitFor(() => expect(toolNames(ctx).filter(n => n.startsWith('mcp__page__'))).toEqual([]))
   })
 
   it('rejects illegal keys and unpaired transport fields before persisting', async () => {
-    const { provider } = await boot()
+    const { ctx, update, entry } = await boot()
+    afterAll(async () => await ctx.dispose())
 
-    await expect(provider.update('mcp-servers', {
+    await expect(update({
       servers: { 'bad name!': { transport: 'stdio', command: 'true', args: [], env: {}, cwd: '' } },
     })).rejects.toThrow(/must match/)
 
-    await expect(provider.update('mcp-servers', {
+    await expect(update({
       servers: { demo: { transport: 'stdio' } },
     })).rejects.toThrow(/stdio requires a non-empty command/)
 
-    await expect(provider.update('mcp-servers', {
+    await expect(update({
       servers: { demo: { transport: 'streamable-http' } },
     })).rejects.toThrow(/streamable-http requires a non-empty url/)
 
-    expect(provider.doc['mcp-servers']).toBeUndefined()
+    expect((entry.options.config as { servers: Record<string, unknown> }).servers).toEqual({})
   })
 
   it('toggling an entry off unregisters its tools and re-enabling restores them', async () => {
-    const { ctx, provider } = await boot()
+    const { ctx, update } = await boot()
     afterAll(async () => await ctx.dispose())
 
-    await provider.update('mcp-servers', {
+    await update({
       servers: { page: { transport: 'stdio', command: process.execPath, args: [fixtureServerPath], cwd: repoRoot } },
     })
     await vi.waitFor(() => expect(toolNames(ctx)).toContain('mcp__page__add'), { timeout: 20_000 })
 
-    await provider.update('mcp-servers', { servers: { page: { enabled: false } } })
+    await update({ servers: { page: { enabled: false } } })
     await vi.waitFor(() => expect(toolNames(ctx).filter(n => n.startsWith('mcp__page__'))).toEqual([]))
 
-    await provider.update('mcp-servers', { servers: { page: { enabled: true } } })
+    await update({ servers: { page: { enabled: true } } })
     await vi.waitFor(() => expect(toolNames(ctx)).toContain('mcp__page__add'), { timeout: 20_000 })
   })
 
   it('editing a command replaces the live generation with the next fixture', async () => {
-    const { ctx, provider } = await boot()
+    const { ctx, update } = await boot()
     afterAll(async () => await ctx.dispose())
 
-    await provider.update('mcp-servers', {
+    await update({
       servers: { page: { transport: 'stdio', command: process.execPath, args: [fixtureServerPath], cwd: repoRoot } },
     })
     await vi.waitFor(() => expect(toolNames(ctx)).toContain('mcp__page__add'), { timeout: 20_000 })
 
-    await provider.update('mcp-servers', { servers: { page: { args: [pingFixturePath] } } })
+    await update({ servers: { page: { args: [pingFixturePath] } } })
     await vi.waitFor(() => expect(toolNames(ctx)).toContain('mcp__page__ping'), { timeout: 20_000 })
     expect(toolNames(ctx)).not.toContain('mcp__page__add')
   })
 
   it('registers a streamable-http entry whose tools join the global set', async () => {
     const fixture = await startHttpMcpFixture()
-    const { ctx, provider } = await boot()
+    const { ctx, update } = await boot()
     afterAll(async () => {
       await ctx.dispose()
       await fixture.close()
     })
 
-    await provider.update('mcp-servers', {
+    await update({
       servers: { remote: { transport: 'streamable-http', url: fixture.url } },
     })
     await vi.waitFor(() => expect(toolNames(ctx)).toContain('mcp__remote__ping'), { timeout: 20_000 })
   })
 
-  it('redacts env values on wire reads and keeps them across sparse field writes', async () => {
-    const { ctx, provider } = await boot({
-      doc: {
-        'mcp-servers': {
-          servers: {
-            page: {
-              transport: 'stdio', command: process.execPath, args: [pingFixturePath],
-              env: { MCP_FIXTURE_KEY: 'hunter2' },
-            },
-          },
+  it('keeps stored secrets across a sparse settings update', async () => {
+    const { ctx, fiber, update } = await boot({
+      servers: {
+        page: {
+          transport: 'stdio', command: process.execPath, args: [pingFixturePath],
+          env: { MCP_FIXTURE_KEY: 'hunter2' },
         },
       },
     })
     afterAll(async () => await ctx.dispose())
     await vi.waitFor(() => expect(toolNames(ctx)).toContain('mcp__page__ping'), { timeout: 20_000 })
 
-    const view = provider.describe({ redactSecrets: true }).find(d => d.ns === 'mcp-servers')
-    expect(view).toBeDefined()
-    const section = view?.value as McpServersSectionWire
-    expect(section.servers.page.env).toEqual({})
-    expect(view?.secrets?.some(s => s.path.join('.') === 'servers.page.env.MCP_FIXTURE_KEY' && s.set)).toBe(true)
+    // A sparse write naming one field must not erase the stored secret from
+    // the manager's live view.
+    await update({ servers: { page: { cwd: repoRoot } } })
+    const live = fiber.config.servers.get() as Record<string, { env: Record<string, string>; cwd: string }>
+    expect(live.page.env).toEqual({ MCP_FIXTURE_KEY: 'hunter2' })
+    expect(live.page.cwd).toBe(repoRoot)
+  })
 
-    // A sparse write naming only cwd must not erase the stored secret.
-    await provider.mutate('mcp-servers', [{ op: 'set', path: ['servers', 'page', 'cwd'], value: repoRoot }])
-    const stored = (provider.doc['mcp-servers'] as McpServersSectionWire).servers.page.env
-    expect(stored).toEqual({ MCP_FIXTURE_KEY: 'hunter2' })
+  it('declares env and header values as wire-redacted secrets', () => {
+    const section = {
+      servers: {
+        page: {
+          transport: 'stdio', command: 'x',
+          env: { MCP_FIXTURE_KEY: 'hunter2' },
+          headers: { Authorization: 'Bearer secret' },
+        },
+      },
+    }
+    const redacted = redactSecrets(Config as never, section)
+    const value = redacted.value as McpServersSectionWire
+    expect(value.servers.page.env).toEqual({})
+    expect(value.servers.page.headers).toEqual({})
+    expect(redacted.secrets).toContainEqual({ path: ['servers', 'page', 'env', 'MCP_FIXTURE_KEY'], set: true })
+    expect(redacted.secrets).toContainEqual({ path: ['servers', 'page', 'headers', 'Authorization'], set: true })
   })
 
   it('expands ${VAR} env values from the host environment at mount config time', () => {
@@ -170,17 +177,18 @@ describe('mcp-servers namespace', () => {
   })
 
   it('rejects non-absolute http urls before persisting', async () => {
-    const { provider } = await boot()
-    await expect(provider.update('mcp-servers', {
+    const { ctx, update } = await boot()
+    afterAll(async () => await ctx.dispose())
+    await expect(update({
       servers: { remote: { transport: 'streamable-http', url: 'not-a-url' } },
     })).rejects.toThrow(/not a valid absolute URL/)
   })
 
   it('reports an unresolved ${VAR} as that entry row error, not a host failure', async () => {
-    const { ctx, provider, webServer } = await boot({ manager: { statusErrorAfterMs: 300 } })
+    const { ctx, webServer, update } = await boot({ statusErrorAfterMs: 300 })
     afterAll(async () => await ctx.dispose())
 
-    await provider.update('mcp-servers', {
+    await update({
       servers: { page: { transport: 'stdio', command: process.execPath, args: [pingFixturePath], env: { KEY: '${NO_SUCH_DSH_VAR_XYZ}' }, cwd: repoRoot } },
     })
     let lastError: string | undefined
@@ -193,10 +201,10 @@ describe('mcp-servers namespace', () => {
   })
 
   it('reports an unreachable server as an entry error while the retry budget keeps running', async () => {
-    const { ctx, provider, webServer } = await boot({ manager: { statusErrorAfterMs: 300 } })
+    const { ctx, webServer, update } = await boot({ statusErrorAfterMs: 300 })
     afterAll(async () => await ctx.dispose())
 
-    await provider.update('mcp-servers', {
+    await update({
       servers: { broken: { transport: 'stdio', command: '/usr/bin/nonexistent-dsh-binary', args: [], cwd: repoRoot } },
     })
     await vi.waitFor(async () => {
@@ -208,10 +216,10 @@ describe('mcp-servers namespace', () => {
   })
 
   it('serves per-server status over the status route: tool counts and last errors', async () => {
-    const { ctx, provider, webServer } = await boot()
+    const { ctx, webServer, update } = await boot()
     afterAll(async () => await ctx.dispose())
 
-    await provider.update('mcp-servers', {
+    await update({
       servers: {
         page: { transport: 'stdio', command: process.execPath, args: [fixtureServerPath], cwd: repoRoot },
         broken: { transport: 'stdio', command: '/usr/bin/nonexistent-dsh-binary', args: [], cwd: repoRoot },
@@ -231,7 +239,7 @@ describe('mcp-servers namespace', () => {
       expect(statuses.page?.enabled).toBe(true)
     }, { timeout: 20_000 })
 
-    await provider.update('mcp-servers', { servers: { page: { enabled: false } } })
+    await update({ servers: { page: { enabled: false } } })
     await vi.waitFor(async () => {
       const statuses = await readStatus()
       expect(statuses.page?.enabled).toBe(false)
@@ -243,7 +251,7 @@ describe('mcp-servers namespace', () => {
     const include = entryFace('include', '@deepseek-ai/cordis-plugin-include', { path: join(root, 'cordis.yml') }, false)
     const memory = entryFace('mcp-codebase-memory', MCP_CLIENT_PACKAGE, { serverName: 'codebase-memory' }, false)
     const context7 = entryFace('mcp-context7', MCP_CLIENT_PACKAGE, { serverName: 'context7' }, true)
-    const { ctx, webServer } = await boot({ loaderEntries: [include, memory, context7] })
+    const { ctx, webServer } = await bootWithEntries([include, memory, context7])
     afterAll(async () => await ctx.dispose())
 
     const response = await fetch(`http://127.0.0.1:${webServer.port}${STATUS_PATH}`)
@@ -260,9 +268,8 @@ describe('mcp-servers namespace', () => {
     // Nested loader ids are the production reality: the persisted patch row
     // must still target the ROOT-level id the insert declared.
     const memory = entryFace('include:mcp-codebase-memory', MCP_CLIENT_PACKAGE, { serverName: 'codebase-memory' }, false)
-    const { ctx, webServer, fakeLoader } = await boot({ loaderEntries: [include, memory] })
+    const { ctx, webServer, fakeLoader } = await bootWithEntries([include, memory])
     afterAll(async () => await ctx.dispose())
-    expect(fakeLoader).toBeDefined()
 
     const patchPath = join(root, 'profiles', 'web', 'cordis.patch.yml')
     await mkdir(dirname(patchPath), { recursive: true })
@@ -274,7 +281,7 @@ describe('mcp-servers namespace', () => {
       body: JSON.stringify({ serverName: 'codebase-memory', enabled: false }),
     })
     expect(disable.status).toBe(200)
-    expect(fakeLoader!.updates.at(-1)).toEqual({ id: 'include:mcp-codebase-memory', options: { disabled: true } })
+    expect(fakeLoader.updates.at(-1)).toEqual({ id: 'include:mcp-codebase-memory', options: { disabled: true } })
     const patchAfterDisable = await readFile(patchPath, 'utf8')
     // The leaf id is what the include applier can resolve.
     expect(patchAfterDisable).toContain('- id: mcp-codebase-memory')
@@ -287,7 +294,7 @@ describe('mcp-servers namespace', () => {
       body: JSON.stringify({ serverName: 'codebase-memory', enabled: true }),
     })
     expect(enable.status).toBe(200)
-    expect(fakeLoader!.updates.at(-1)).toEqual({ id: 'include:mcp-codebase-memory', options: { disabled: false } })
+    expect(fakeLoader.updates.at(-1)).toEqual({ id: 'include:mcp-codebase-memory', options: { disabled: false } })
     expect(await readFile(patchPath, 'utf8')).toContain('disabled: false')
   })
 })

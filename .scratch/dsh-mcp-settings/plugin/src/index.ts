@@ -1,15 +1,18 @@
 /**
  * @dsh-external/dsh-mcp-settings — Host 半区：MCP 服务器管理器。
  *
- * settings namespace `mcp-servers` 是唯一真相源。每个启用条目在本 ctx 上以
- * 进程内插件挂载一个 @deepseek-ai/dsh-mcp-client 实例（root 作用域 → 工具进
- * 全局工具层，所有活动会话即时可见）；停用 / 删除 / 管理器卸载即 dispose 对
- * 应 fiber（连接断开、工具注销、serverName 保留释放）。条目配置变更 = 换代
- * （先 dispose 后重挂）。挂载失败（如 serverName 与 patch 手工行冲突）只影响
- * 该条目：捕获后记录错误，不影响其它条目与宿主。
+ * 插件自身 Config 的 volatile `servers` 字段是唯一真相源（随所在 profile 的
+ * patch 落盘；settings 页的写入以 loader volatile 提交到达，无需重启）。每个
+ * 启用条目在本 ctx 上以进程内插件挂载一个 @deepseek-ai/dsh-mcp-client 实例
+ * （root 作用域 → 工具进全局工具层，所有活动会话即时可见）；停用 / 删除 /
+ * 管理器卸载即 dispose 对应 fiber（连接断开、工具注销、serverName 保留释放）。
+ * 条目配置变更 = 换代（先 dispose 后重挂）。挂载失败（如 serverName 与 patch
+ * 手工行冲突）只影响该条目：捕获后记录错误，不影响其它条目与宿主。
  * @module @dsh-external/dsh-mcp-settings
  */
 import type { Context, Fiber } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/cordis-plugin-loader'
+import type { Volatile } from '@deepseek-ai/cosmokit'
 import z from '@deepseek-ai/schemastery'
 import * as McpClient from '@deepseek-ai/dsh-mcp-client'
 import type {} from '@deepseek-ai/dsh-settings'
@@ -19,15 +22,15 @@ import type { IncomingMessage } from 'node:http'
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { MCP_SERVERS_NAMESPACE, SERVER_NAME_PATTERN, STATUS_PATH, TOGGLE_CONFIG_ROW_PATH, type McpTransport } from './wire.ts'
+import { SERVER_NAME_PATTERN, STATUS_PATH, TOGGLE_CONFIG_ROW_PATH, type McpTransport } from './wire.ts'
 
-export { MCP_SERVERS_NAMESPACE, SERVER_NAME_PATTERN, STATUS_PATH, TOGGLE_CONFIG_ROW_PATH } from './wire.ts'
+export { SERVER_NAME_PATTERN, STATUS_PATH, TOGGLE_CONFIG_ROW_PATH } from './wire.ts'
 
 /** Cordis plugin name; the injector keys loader rows by the package name. */
 export const name = '@dsh-external/dsh-mcp-settings'
 
-/** Settings consumer; `webServer` serves the status projection; `tools` counts live registrations. The loader is read optionally: config rows are a projection, never a startup dependency. */
-export const inject = ['settings', 'tools', 'webServer']
+/** `webServer` serves the status projection; `tools` counts live registrations. The loader is read optionally: config rows are a projection, never a startup dependency. Settings arrives optionally: it only carries this entry's page policy. */
+export const inject = ['tools', 'webServer']
 
 /** Loader row module name for patch-configured mcp-client servers. */
 const MCP_CLIENT_PACKAGE = '@deepseek-ai/dsh-mcp-client'
@@ -103,7 +106,7 @@ export interface McpServerEntry {
   headers: Record<string, string>
 }
 
-/** Resolved shape of the `mcp-servers` settings namespace. */
+/** Resolved shape of the manager's `servers` section. */
 export interface McpServersSection {
   /** Managed servers, keyed by serverName. */
   servers: Record<string, McpServerEntry>
@@ -118,10 +121,6 @@ const ServerEntry: z<McpServerEntry> = z.object({
   cwd: z.string().default(''),
   url: z.string(),
   headers: z.dict(z.string().role('secret')).default({}),
-})
-
-export const Section: z<McpServersSection> = z.object({
-  servers: z.dict(ServerEntry).default({}),
 })
 
 /**
@@ -270,14 +269,25 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
   })
 }
 
-/** Plugin config: deployment-varying timings the manager needs. */
+/**
+ * Plugin config: the settings section the MCP page edits, plus the deployment
+ * timing the manager reads once. `servers` is volatile — a settings write
+ * reaches the running manager through a loader volatile commit and a
+ * `loader/volatile-update` event, without remounting it.
+ */
 export interface Config {
-  /** Seconds after mount before a server with zero live tools is reported as starting-failed (still auto-retrying). */
+  /** Milliseconds after mount before a server with zero live tools is reported as starting-failed (still auto-retrying). */
   statusErrorAfterMs: number
+  /** Managed servers, keyed by serverName. */
+  servers: Volatile<Record<string, McpServerEntry>>
 }
 
-export const Config: z<Config> = z.object({
+/** Plain options: the same shape with volatile fields unwrapped, as raw configs spell it. */
+export type Options = { [K in keyof Config]?: Config[K] extends Volatile<infer T> ? T : Config[K] }
+
+export const Config = z.object({
   statusErrorAfterMs: z.number().min(100).default(10_000),
+  servers: z.dict(ServerEntry).default({}).volatile(),
 })
 
 /** Replace every stored secret value in a status message with a marker. */
@@ -295,7 +305,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const failures = new Map<string, string>()
   const toolCounts = new Map<string, number>()
   const startingTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  let source: () => McpServersSection = () => ({ servers: {} })
+  /** Live servers section: the plugin's own volatile config, resolved with per-entry defaults. */
+  const source = (): McpServersSection => ({ servers: config.servers.get() as Record<string, McpServerEntry> })
   let queue: Promise<void> = Promise.resolve()
   let disposing = false
 
@@ -437,11 +448,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     queue = queue.then(syncNow, syncNow)
   }
 
-  ctx.settings.installSection(ctx, MCP_SERVERS_NAMESPACE, Section, { servers: {} }, {
-    setSource: current => void (source = current),
-    validate: validateSection,
-    onChange: enqueueSync,
+  // A settings write lands as a volatile commit on this entry: re-sync mounts in place.
+  ctx.on('loader/volatile-update', () => { enqueueSync() })
+
+  // Refuse sections the schema cannot judge (serverName pattern, transport pairing) before they persist.
+  ctx.on('internal/config', function (this: Fiber, _raw, next) {
+    const raw: unknown = next()
+    if (this !== ctx.fiber) return raw
+    validateSection({ servers: Config(raw as Options).servers.get() as Record<string, McpServerEntry> })
+    return raw
   })
+
+  // This plugin serves its own page: suppress any auto-generated configuration page for the entry.
+  ctx.inject(['settings'], (child) => { child.effect(() => child.settings.configure({ auto: false }, ctx.fiber)) })
 
   ctx.effect(() => ctx.on('tools/change', refreshToolCounts), 'mcp-settings.tools-count')
 
@@ -487,4 +506,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     for (const mount of mounts.values()) await mount.fiber.dispose()
     mounts.clear()
   }, 'mcp-settings.mounts')
+
+  // Mount the entries the current configuration already enables.
+  enqueueSync()
 }

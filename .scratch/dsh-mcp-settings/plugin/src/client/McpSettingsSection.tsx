@@ -1,6 +1,6 @@
 import { useEffect, useState, useSyncExternalStore, type CSSProperties, type FormEvent, type ReactNode } from 'react'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { ConfigFormSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { McpLocaleKey } from './locales.ts'
 import { SERVER_NAME_PATTERN, type McpConfigRowStatusWire, type McpServerEntryWire, type McpServersSectionWire, type McpServerStatusWire, type McpTransport } from '../wire.ts'
 
@@ -10,10 +10,10 @@ export interface McpStatusView {
   configRows: McpConfigRowStatusWire[]
 }
 
-/** Registration-side face: mirror reads plus granular, path-addressed writes. */
+/** Registration-side face: config-form reads plus granular, path-addressed writes. */
 export interface McpSettingsSectionInjected {
-  /** Current sync snapshot of the `mcp-servers` namespace. */
-  getSnapshot: () => SettingsScopeSnapshot<McpServersSectionWire>
+  /** Current sync snapshot of the manager's settings form (`servers` section). */
+  getSnapshot: () => ConfigFormSnapshot<McpServersSectionWire>
   /** Observe snapshot replacements; returns the disposer. */
   subscribe: (listener: () => void) => () => void
   /** Add one server (entry fields only; absent secret fields stay absent). */
