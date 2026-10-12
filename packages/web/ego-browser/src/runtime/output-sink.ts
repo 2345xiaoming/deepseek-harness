@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.0.0-beta.4 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 import { writeSync } from 'node:fs'
 
 import { formatCliLogValue } from './format.ts'

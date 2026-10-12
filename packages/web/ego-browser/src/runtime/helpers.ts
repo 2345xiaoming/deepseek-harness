@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.0.0-beta.4 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -8,6 +8,7 @@ import { invokeEgo, probeAgentControl } from './ego-errors.ts'
 import { help as helpRuntime, formatHelp } from './help-runtime.ts'
 import { validatePublicApiOptions } from './public-api-schema.ts'
 import { createStaleEgoBrowserGuard } from './skill-migration.ts'
+import { bufferOutput } from './output-sink.ts'
 import { cdp, decodeUnserializableJsValue, js } from './cdp-eval.ts'
 import * as pointer from './driver/pointer.ts'
 import * as keyboard from './driver/keyboard.ts'
@@ -135,7 +136,7 @@ export async function profiles() {
  *   completeTaskSpace { keep: false }   -> claims it, then closes it
  *   takeOverTaskSpace / waitForAgentControl -> no ownership check (operates as-is)
  *
- * Keep this table in sync with the one in skills/ego-browser/SKILL.md.
+ * Keep this table in sync with the one in skill-body/SKILL.md.
  */
 
 /**
@@ -160,7 +161,7 @@ export async function switchTaskSpace(nameOrId) {
   if (!ego || typeof ego.useTaskSpace !== 'function') {
     throw new Error('switchTaskSpace requires ego.useTaskSpace')
   }
-  const space = await findTaskSpace(nameOrId)
+  const space = await findTaskSpace(nameOrId, 'switchTaskSpace')
   if (!isAgentOwned(space.ownership)) {
     throw new Error(
       `switchTaskSpace requires an agent-owned task space, got ownership ${JSON.stringify(space.ownership)}`,
@@ -176,6 +177,7 @@ export async function switchTaskSpace(nameOrId) {
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
 export async function newTaskSpace(name, profileId?: string) {
+  assertTaskSpaceName('newTaskSpace', name)
   return (await createTaskSpaceResolution(name, profileId)).descriptor
 }
 
@@ -227,6 +229,7 @@ async function createTaskSpaceResolution(
 export async function useOrCreateTaskSpace(
   nameOrId,
 ): Promise<import('./page-model.ts').TaskSpace> {
+  assertTaskSpaceLocator('useOrCreateTaskSpace', nameOrId)
   return (await resolveTaskSpace(nameOrId)).descriptor
 }
 
@@ -281,12 +284,13 @@ async function resolveTaskSpace(nameOrId, options: { select?: boolean } = {}) {
  * when a string name does not exist.
  * @param {string|number} nameOrId Task space name or numeric id.
  * @param {{profileId?:string}} [options] Creation options for a new named space.
- * @returns {Promise<import('./page-model.js').TaskSpace>}
+ * @returns {Promise<import('./page-model.ts').TaskSpace>}
  */
 export async function taskSpace(
   nameOrId,
   options: { profileId?: string } = {},
 ): Promise<import('./page-model.ts').TaskSpace> {
+  assertTaskSpaceLocator('taskSpace', nameOrId)
   validatePublicApiOptions('taskSpace', options)
   const { profileId } = options
   if (profileId === undefined) {
@@ -333,12 +337,12 @@ async function initializeResolvedTaskSpace(resolution) {
  * for the current Node invocation. Resolves the space by id/name, claims it via
  * ego.claimTaskSpace, then selects it.
  * @param {string|number} nameOrId Task space id or name.
- * @returns {Promise<import('./page-model.js').TaskSpace>}
+ * @returns {Promise<import('./page-model.ts').TaskSpace>}
  */
 export async function claimTaskSpace(
   nameOrId,
 ): Promise<import('./page-model.ts').TaskSpace> {
-  const space = await findTaskSpace(nameOrId)
+  const space = await findTaskSpace(nameOrId, 'claimTaskSpace')
   const claimed = await claimResolvedTaskSpace(space, 'claimTaskSpace')
   const task = createTaskSpaceHandle({ ...claimed, ownership: 'agent' })
   await captureTaskSpaceUserBoundary(task)
@@ -376,7 +380,7 @@ async function selectTaskSpaceIfProvided(
   op = 'taskSpace',
 ) {
   if (nameOrId === undefined) return
-  const match = await findTaskSpace(nameOrId)
+  const match = await findTaskSpace(nameOrId, op)
   await selectTaskSpace(ego, match, op)
 }
 
@@ -451,7 +455,7 @@ export async function handOffTaskSpace(nameOrId?: string | number) {
     throw new Error('handOffTaskSpace requires ego.handOffTaskSpace')
   }
   if (nameOrId !== undefined) {
-    const match = await findTaskSpace(nameOrId)
+    const match = await findTaskSpace(nameOrId, 'handOffTaskSpace')
     if (match.ownership === 'user') {
       return { done: false, skipped: 'user-owned' as const }
     }
@@ -464,7 +468,7 @@ export async function handOffTaskSpace(nameOrId?: string | number) {
 /**
  * Take over a task space, showing the agent overlay to indicate work has resumed.
  * @param {string|number} [nameOrId] Task space id or name. If provided, switches to that space first.
- * @returns {Promise<import('./page-model.js').TaskSpace|void>} A TaskSpace when a name or id is provided;
+ * @returns {Promise<import('./page-model.ts').TaskSpace|void>} A TaskSpace when a name or id is provided;
  *   otherwise preserves the selected-space form's void result.
  */
 export async function takeOverTaskSpace(
@@ -476,7 +480,7 @@ export async function takeOverTaskSpace(
   }
   let descriptor
   if (nameOrId !== undefined) {
-    descriptor = await findTaskSpace(nameOrId)
+    descriptor = await findTaskSpace(nameOrId, 'takeOverTaskSpace')
     await selectTaskSpace(ego, descriptor, 'takeOverTaskSpace')
   }
   await invokeEgo('takeOverTaskSpace', () => ego.takeOverTaskSpace())
@@ -571,11 +575,36 @@ function taskSpaceNumericId(space, op: string) {
   return space.id
 }
 
-async function findTaskSpace(nameOrId) {
+async function findTaskSpace(nameOrId, op: string) {
+  assertTaskSpaceLocator(op, nameOrId)
   const spaces = await listTaskSpaces()
   const match = findMatchingTaskSpace(spaces, nameOrId)
   if (!match) throw new Error(`task space not found: ${nameOrId}`)
   return match
+}
+
+// Reject bad locators before any native call: an unmatched string name falls
+// through to creating a space, so undefined must never reach that branch.
+function assertTaskSpaceLocator(op: string, nameOrId: unknown) {
+  if (typeof nameOrId === 'number' && Number.isSafeInteger(nameOrId)) return
+  if (typeof nameOrId === 'string' && nameOrId.trim() !== '') return
+  throw new TypeError(
+    `${op} expects a task-space name (non-empty string) or numeric id, got ${describeLocator(nameOrId)}. ` +
+      'listTaskSpaces() entries expose the numeric id as "id"; pass entry.id.',
+  )
+}
+
+function assertTaskSpaceName(op: string, name: unknown) {
+  if (typeof name === 'string' && name.trim() !== '') return
+  throw new TypeError(
+    `${op} expects a non-empty task-space name, got ${describeLocator(name)}`,
+  )
+}
+
+function describeLocator(value: unknown) {
+  if (typeof value === 'string') return JSON.stringify(value)
+  if (typeof value === 'number' || value == null) return String(value)
+  return typeof value
 }
 
 function findMatchingTaskSpace(spaces, nameOrId) {
@@ -651,7 +680,12 @@ export async function learnContext(url = undefined) {
   })
 }
 
-export function helperContext(extra: any = {}) {
+export function helperContext(
+  extra: any = {},
+  {
+    printHelp = (text: string) => bufferOutput(`${text}\n`),
+  }: { printHelp?: (text: string) => void } = {},
+) {
   const { newTab: _newTab, ...publicNav } = nav
   const all = {
     ...pointer,
@@ -687,11 +721,18 @@ export function helperContext(extra: any = {}) {
     // The formal 1.3 Skill starts through egoBrowser.*. Keep a narrow guard so
     // stale conversations get a recovery instruction instead of a ReferenceError.
     egoBrowser: createStaleEgoBrowserGuard(),
+    // help() prints its text so `ego-browser nodejs -e 'help()'` shows it, and
+    // still returns the text for scripts that already log or inspect it.
     help: (...names: string[]) => {
       const result = helpRuntime(all, ...names)
-      if (typeof result === 'string') return result
-      if (Array.isArray(result)) return result.map(formatHelp).join('\n\n')
-      return formatHelp(result)
+      const text =
+        typeof result === 'string'
+          ? result
+          : Array.isArray(result)
+            ? result.map(formatHelp).join('\n\n')
+            : formatHelp(result)
+      printHelp(text)
+      return text
     },
   }
 }

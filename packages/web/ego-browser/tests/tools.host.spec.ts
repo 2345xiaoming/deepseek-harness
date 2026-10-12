@@ -1,6 +1,7 @@
 /**
  * Tool-registration tests: mounting the plugin registers all browser_* tools on a
- * fresh Context. These are registry-level (no Chrome is launched), so they run
+ * fresh Context, and `browser_run` executes through the same runtime the agent
+ * loop uses. These are registry-level (no Chrome is launched), so they run
  * anywhere.
  */
 
@@ -8,19 +9,28 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import * as EgoBrowser from '../src/index.ts'
 
 async function mount(): Promise<{
   ctx: Context
   fiber: Awaited<ReturnType<Context['plugin']>>
   names: string[]
+  call: (name: string, args: unknown) => ReturnType<ToolRuntime['execute']>
 }> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   const fiber = await ctx.plugin(EgoBrowser, { enabled: true })
   const names = ctx.tools.schemas().map(s => s.name)
-  return { ctx, fiber, names }
+  const call = (name: string, args: unknown) =>
+    ctx.tools.execute({
+      name,
+      arguments: args,
+      callId: ToolCallId('ego-browser-test'),
+      signal: new AbortController().signal,
+    })
+  return { ctx, fiber, names, call }
 }
 
 describe('dsh-ego-browser tool registration', () => {
@@ -54,5 +64,14 @@ describe('dsh-ego-browser tool registration', () => {
     await fiber.dispose()
     const after = ctx.tools.schemas().map(s => s.name)
     expect(after.filter(n => n.startsWith('browser_'))).toHaveLength(0)
+  })
+
+  it('returns help() text from browser_run without an explicit console.log', async () => {
+    const { call } = await mount()
+    const result = await call('browser_run', { js: 'help()' })
+    expect(result.isError).not.toBe(true)
+    // The ported sink only flushes through the CLI lifecycle, so a bare help()
+    // reaches the model only when browser_run binds printHelp to its own output.
+    expect(result.value).toContain('page.snapshot')
   })
 })

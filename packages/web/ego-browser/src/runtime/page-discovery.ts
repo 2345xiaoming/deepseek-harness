@@ -1,9 +1,8 @@
+// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 /**
  * Round-local Page discovery shared by action receipts, popup waiters, URL
  * diagnostics, and the final unhandled-Page summary.
  */
-// @ts-nocheck — ported from ego-browser v2.0.0-beta.4 (strict:false); vendor exemption, not strict-checked.
-
 export type UnhandledPageNotice = {
   spaceId: number
   targetId: string

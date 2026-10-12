@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.0.0-beta.4 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 import { mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -11,7 +11,6 @@ import {
   drainBrowserEvents,
   ensureSession,
   isBrowserRuntime,
-  pendingDialog,
 } from '../browser-runtime.ts'
 import { invokeEgo } from '../ego-errors.ts'
 import { resolveElementCenter } from '../element-resolver.ts'
@@ -23,7 +22,8 @@ import {
 } from '../ref-state.ts'
 
 export type SnapshotOptions = {
-  scope?: 'only_within_viewport' | 'full_page'
+  scope?: 'only_within_viewport' | 'full_page' | 'subtree'
+  root?: number
   includeActionMarks?: boolean
   includeStableLocator?: boolean
 }
@@ -65,12 +65,14 @@ export const snapshotRaw = snapshot
 
 /**
  * Return snapshot content with agent-friendly defaults.
- * @param {{scope?: "only_within_viewport"|"full_page", includeActionMarks?: boolean, includeStableLocator?: boolean}} [options]
+ * @param {{scope?: "only_within_viewport"|"full_page"|"subtree", root?: number, includeActionMarks?: boolean,
+ *   includeStableLocator?: boolean}} [options]
  * @returns {Promise<string>}
  */
 export async function snapshotText(options: SnapshotOptions = {}) {
   const result = await snapshot({
     scope: options.scope ?? 'full_page',
+    ...(options.root === undefined ? {} : { root: options.root }),
     includeActionMarks: options.includeActionMarks ?? true,
     includeStableLocator: options.includeStableLocator ?? true,
   })
@@ -128,50 +130,48 @@ export async function captureScreenshotForSession(
       params.clip = { ...options.clip }
     }
   } else {
-    if (!pendingDialog(sessionId)) {
-      const dprExpression = 'window.devicePixelRatio'
-      const dpr =
-        Number(
-          runtimeValue(
-            await cdp(
-              'Runtime.evaluate',
-              {
-                expression: dprExpression,
-                returnByValue: true,
-              },
-              sessionId,
-            ),
-            dprExpression,
-          ),
-        ) || 1
-      const cssScale = 1 / dpr
-      if (options.clip) {
-        params.clip = { scale: cssScale, ...options.clip }
-      } else {
-        const infoExpression =
-          '({url:location.href,title:document.title,w:innerWidth,h:innerHeight,sx:scrollX,sy:scrollY,pw:document.documentElement.scrollWidth,ph:document.documentElement.scrollHeight})'
-        const info = runtimeValue(
+    const dprExpression = 'window.devicePixelRatio'
+    const dpr =
+      Number(
+        runtimeValue(
           await cdp(
             'Runtime.evaluate',
             {
-              expression: infoExpression,
+              expression: dprExpression,
               returnByValue: true,
             },
             sessionId,
           ),
-          infoExpression,
-        )
-        params.clip = {
-          // CDP interprets clip coordinates in the page's document coordinate
-          // space. A viewport screenshot therefore starts at the current scroll
-          // offset, while a full-page screenshot still starts at the document
-          // origin.
-          x: full ? 0 : info.sx,
-          y: full ? 0 : info.sy,
-          width: full ? info.pw : info.w,
-          height: full ? info.ph : info.h,
-          scale: cssScale,
-        }
+          dprExpression,
+        ),
+      ) || 1
+    const cssScale = 1 / dpr
+    if (options.clip) {
+      params.clip = { scale: cssScale, ...options.clip }
+    } else {
+      const infoExpression =
+        '({url:location.href,title:document.title,w:innerWidth,h:innerHeight,sx:scrollX,sy:scrollY,pw:document.documentElement.scrollWidth,ph:document.documentElement.scrollHeight})'
+      const info = runtimeValue(
+        await cdp(
+          'Runtime.evaluate',
+          {
+            expression: infoExpression,
+            returnByValue: true,
+          },
+          sessionId,
+        ),
+        infoExpression,
+      )
+      params.clip = {
+        // CDP interprets clip coordinates in the page's document coordinate
+        // space. A viewport screenshot therefore starts at the current scroll
+        // offset, while a full-page screenshot still starts at the document
+        // origin.
+        x: full ? 0 : info.sx,
+        y: full ? 0 : info.sy,
+        width: full ? info.pw : info.w,
+        height: full ? info.ph : info.h,
+        scale: cssScale,
       }
     }
   }

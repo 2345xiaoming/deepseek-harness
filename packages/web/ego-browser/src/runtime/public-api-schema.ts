@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.0.0-beta.4 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 export type PublicApiOptionKind =
   | 'boolean'
   | 'clip'
@@ -110,7 +110,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: 'TaskSpace.page',
     signature: 'task.page(label)',
-    summary: 'Create a lazy Page handle for a durable page label.',
+    summary:
+      'Create a lazy handle for an existing managed Page label; it neither creates a Page nor checks that the label exists.',
   },
   {
     name: 'TaskSpace.userPage',
@@ -165,7 +166,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     name: 'TaskSpace.finish',
     signature: 'await task.finish({ keep })',
     summary:
-      'Finish the task and keep selected managed Pages; an empty list closes the space when no protected tabs remain.',
+      'Finish the task and return a receipt with retained and closed managed Page labels; an empty list closes the space when no protected tabs remain.',
     options: {
       keep: option(
         'pageRetention',
@@ -234,14 +235,18 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: 'Page.snapshot',
     signature:
-      'await page.snapshot({ scope?, includeActionMarks?, includeStableLocator? })',
+      'await page.snapshot({ scope?, root?, includeActionMarks?, includeStableLocator? })',
     summary:
-      'Return a semantic snapshot of the current viewport with Page provenance.',
+      'Return a semantic snapshot of the current viewport, full Page, or one snapshot-ref subtree with Page provenance.',
     options: {
       scope: option(
         'string',
-        'Snapshot scope; defaults to only_within_viewport.',
-        ['full_page', 'only_within_viewport'],
+        'Snapshot scope; defaults to only_within_viewport, including visible iframe content returned by the browser. Use subtree with an iframe root ref to focus on that frame.',
+        ['full_page', 'only_within_viewport', 'subtree'],
+      ),
+      root: option(
+        'nonEmptyString',
+        'Valid Page snapshot ref such as @21; required only when scope is subtree. Partial snapshots preserve existing node identities.',
       ),
       includeActionMarks: option('boolean', 'Include action marks.'),
       includeStableLocator: option('boolean', 'Include stable locators.'),
@@ -255,7 +260,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     options: {
       path: option(
         'string',
-        'Output path; missing parent directories are created.',
+        'Absolute output path; missing parent directories are created.',
       ),
       fullPage: option('boolean', 'Capture the full scrollable page.'),
       clip: option('clip', 'CSS-pixel clipping rectangle.'),
@@ -281,10 +286,52 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   },
   {
     name: 'Page.waitForEvent',
-    signature: 'await page.waitForEvent("popup", { timeout? })',
+    signature: 'await page.waitForEvent(event, { timeout? })',
     summary:
-      "Wait for this Page's next popup; call before the triggering action.",
+      'Wait for this Page\'s next "popup" or "download"; arm the promise before the triggering action.',
     options: { timeout },
+  },
+  {
+    name: 'Download.page',
+    signature: 'download.page()',
+    summary: 'Return the Page that started this download.',
+  },
+  {
+    name: 'Download.url',
+    signature: 'download.url()',
+    summary: 'Return the download URL.',
+  },
+  {
+    name: 'Download.suggestedFilename',
+    signature: 'download.suggestedFilename()',
+    summary: "Return Chromium's suggested file name.",
+  },
+  {
+    name: 'Download.saveAs',
+    signature: 'await download.saveAs(absolutePath)',
+    summary:
+      'Wait for completion and copy the download to an absolute path, creating missing parent directories.',
+  },
+  {
+    name: 'Download.path',
+    signature: 'await download.path()',
+    summary:
+      'Wait for completion and return the round-local temporary file path.',
+  },
+  {
+    name: 'Download.failure',
+    signature: 'await download.failure()',
+    summary: 'Wait for completion and return null or the failure reason.',
+  },
+  {
+    name: 'Download.cancel',
+    signature: 'await download.cancel()',
+    summary: 'Cancel this download by its Chromium download identifier.',
+  },
+  {
+    name: 'Download.delete',
+    signature: 'await download.delete()',
+    summary: "Delete this download's round-local temporary files.",
   },
   {
     name: 'Page.waitForTimeout',
@@ -342,7 +389,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
       timeout,
       saveAs: option(
         'nonEmptyString',
-        'Write the response body to this path without text conversion.',
+        'Write the response body to this absolute path without text conversion.',
       ),
       method: option('string', 'HTTP method.'),
       headers: option('stringRecord', 'Request headers.'),
@@ -484,7 +531,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: 'Page.press',
     signature: 'await page.press(selector, chord, { delay?, timeout? })',
-    summary: 'Focus one element and press a key or shortcut chord.',
+    summary:
+      'Focus one element and press a key or shortcut chord. Named keys are case-insensitive; single-character keys preserve case.',
     options: { delay, timeout: actionTimeout },
   },
   {
@@ -580,7 +628,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: 'Page.keyboard.press',
     signature: 'await page.keyboard.press(chord, { delay? })',
-    summary: 'Press and release a key or portable shortcut chord.',
+    summary:
+      'Press and release a key or portable shortcut chord. Named keys are case-insensitive; single-character keys preserve case.',
     options: { delay },
   },
   {
@@ -652,61 +701,11 @@ function validationMessage(entry: PublicApiEntry, message: string): string {
   return `${message}. Expected: ${entry.signature}`
 }
 
-export function publicApiMarkdown(): string {
-  const groups = new Map<string, PublicApiEntry[]>()
-  for (const entry of PUBLIC_API_SCHEMA) {
-    const group = entry.name.startsWith('TaskSpace.')
-      ? 'TaskSpace'
-      : entry.name.startsWith('Page.mouse.')
-        ? 'Page.mouse'
-        : entry.name.startsWith('Page.keyboard.')
-          ? 'Page.keyboard'
-          : entry.name.startsWith('Page.')
-            ? 'Page'
-            : 'Entry points'
-    const entries = groups.get(group) || []
-    entries.push(entry)
-    groups.set(group, entries)
-  }
-
-  const lines = [
-    '# ego-browser v2 API reference',
-    '',
-    'Generated from `package/ego-browser/src/public-api-schema.ts`.',
-    '',
-    'High-level Page actions return a receipt that may contain `popups` or a synchronous `dialog`. Handle a returned dialog with `page.acceptDialog(promptText?)` or `page.dismissDialog()` before continuing.',
-    '',
-    'For an explicit popup wait, arm it before the action: `const popupPromise = page.waitForEvent("popup"); await page.click(selector); const popup = await popupPromise;`. Action receipts instead expose `{ label, targetId }` entries in `receipt.popups`; resolve one with `task.page(label)`.',
-    '',
-    'Selectors accept refs, Ego locators, XPath, and raw CSS. A small compatibility subset also accepts `css=...`, terminal `:has-text("...")` and `:text-is("...")`, `>> nth=N` after CSS/text/href selectors (`N` is `-1` or non-negative), and `loc=role:...[name*="..."]`.',
-  ]
-  for (const [group, entries] of groups) {
-    lines.push(
-      '',
-      `## ${group}`,
-      '',
-      '| API | Options | Purpose |',
-      '| --- | --- | --- |',
-    )
-    for (const entry of entries) {
-      const options = entry.options
-        ? Object.entries(entry.options)
-          .map(([name, specification]) => {
-            const values = specification.values
-              ? ` (${specification.values.join(', ')})`
-              : ''
-            return `\`${name}\`${values} — ${specification.description}`
-          })
-          .join('<br>')
-        : '—'
-      lines.push(`| \`${entry.signature}\` | ${options} | ${entry.summary} |`)
-    }
-  }
-  return `${lines.join('\n').trimEnd()}\n`
-}
-
 function displayName(name: string): string {
-  return name.replace(/^TaskSpace/, 'task').replace(/^Page/, 'page')
+  return name
+    .replace(/^TaskSpace/, 'task')
+    .replace(/^Page/, 'page')
+    .replace(/^Download/, 'download')
 }
 
 function validateOptionValue(

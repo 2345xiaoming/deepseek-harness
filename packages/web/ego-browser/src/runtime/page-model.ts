@@ -1,6 +1,6 @@
-// @ts-nocheck — ported from ego-browser v2.0.0-beta.4 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { dirname, isAbsolute } from 'node:path'
 
 import {
   browserCdp,
@@ -13,12 +13,14 @@ import {
   isCdpRequestTimeoutError,
   isBrowserRuntime,
   isPageDialogOpenedError,
+  isSessionLostError,
   networkActivity,
   pageNetworkSessions,
   pendingDialog,
   prepareFileChooser,
   setPreferredTarget,
   subscribeBrowserEvents,
+  subscribePageEvents,
   type FileChooserInterception,
   type FileChooserOpenedEvent,
 } from './browser-runtime.ts'
@@ -59,12 +61,18 @@ import {
   setInputFilesInPage,
 } from './driver/page-input.ts'
 import {
+  preparePageDownload,
+  type DownloadArtifact,
+  type DownloadInterception,
+} from './driver/downloads.ts'
+import {
   PageKeyboardController,
   type PageClipboardContent,
   type PageKeyboardPressOptions,
   type PageKeyboardTypeOptions,
 } from './driver/page-keyboard.ts'
 import {
+  isTransientElementError,
   navigateInPage,
   reloadInPage,
   waitForLoadStateInPage,
@@ -90,8 +98,15 @@ import {
   type PageLedger,
   type PageOrigin,
 } from './page-ledger.ts'
-import { PageRefRegistry } from './page-ref-registry.ts'
-import { preparePageSnapshotResult } from './snapshot-result.ts'
+import {
+  PageRefRegistry,
+  pageRefDocumentId,
+  type PageRefState,
+} from './page-ref-registry.ts'
+import {
+  preparePageSnapshotResult,
+  rewriteSnapshotRefIds,
+} from './snapshot-result.ts'
 import {
   clearSpacePageNotices,
   forgetPageNotice,
@@ -118,6 +133,11 @@ type TaskSpaceDescriptor = {
   recentTabTitles?: string[]
 }
 
+/**
+ * An action failed on element state after resolution (hidden, moving, covered)
+ * and may simply be attempted again. Transport and session errors are not
+ * included: input may already have reached the page.
+ */
 function isRetryableElementStateError(
   error: unknown,
 ): error is ElementResolutionError {
@@ -125,6 +145,26 @@ function isRetryableElementStateError(
     error instanceof ElementResolutionError &&
     error.kind === 'transient' &&
     !error.message.startsWith('Unknown ref:')
+  )
+}
+
+/**
+ * Resolution or frame discovery failed before any input was dispatched. On top
+ * of the element-state cases above, a frame that vanished or an iframe session
+ * that was lost is recovered by rediscovering frames; losing the Page's own
+ * session is terminal.
+ */
+function isRetryableResolutionError(
+  error: unknown,
+  pageSessionId: string,
+): error is Error {
+  if (isTransientElementError(error)) {
+    return !error.message.startsWith('Unknown ref:')
+  }
+  return (
+    isSessionLostError(error) &&
+    typeof error.sessionId === 'string' &&
+    error.sessionId !== pageSessionId
   )
 }
 
@@ -140,7 +180,9 @@ type PageGotoOptions = {
 
 type PageReloadOptions = Pick<PageGotoOptions, 'timeout' | 'waitUntil'>
 
-type PageSnapshotOptions = SnapshotOptions
+type PageSnapshotOptions = Omit<SnapshotOptions, 'root'> & {
+  root?: string
+}
 
 type PageScreenshotOptions = Omit<CaptureScreenshotOptions, 'full'> & {
   path?: string
@@ -162,6 +204,14 @@ type WaitForControlOptions = {
 
 type FinishOptions = {
   keep: 'all' | string[]
+}
+
+export type TaskFinishReceipt = {
+  spaceId: number
+  closedSpace: boolean
+  keptManagedLabels: string[]
+  closedManagedLabels: string[]
+  preservedUnmanagedCount: number
 }
 
 type PageWaitForFileChooserOptions = {
@@ -253,6 +303,11 @@ type LedgerPort = {
     options?: { as?: string; openedBy?: PageOrigin },
   ): Promise<ManagedPage>
   getPage(spaceId: number, label: string): Promise<ManagedPage>
+  setPageRefs(
+    spaceId: number,
+    label: string,
+    refs: PageRefState,
+  ): Promise<void>
   closePage(spaceId: number, label: string): Promise<ManagedPage>
   releasePage(spaceId: number, label: string): Promise<ManagedPage>
   keepUnmanaged(
@@ -322,11 +377,22 @@ type PageModelServices = {
     lastActivityAt: number
   }
   ensureSession(targetId: string): Promise<string>
-  ensureFrameSessions(targetId: string): Promise<Map<string, string>>
+  ensureFrameSessions(
+    targetId: string,
+    timeoutMs?: number,
+  ): Promise<Map<string, string>>
   invalidateSession(targetId: string): void
   setPreferredTarget(targetId: string): void
   supportsBackgroundPageDiscovery(): boolean
   subscribeBrowserEvents(listener: (event: any) => void): () => void
+  subscribePageEvents(
+    targetId: string,
+    listener: (event: any) => void,
+  ): () => void
+  prepareDownload(
+    targetId: string,
+    options: { timeoutMs: number },
+  ): DownloadInterception
   now(): number
   sleep(ms: number): Promise<void>
   platform: string
@@ -606,6 +672,7 @@ const captureUserBoundaryToken = Symbol('captureUserBoundary')
 const initializeTaskSpaceToken = Symbol('initializeTaskSpace')
 const initializeCreatedSpaceToken = Symbol('initializeCreatedSpace')
 const rollbackCreatedTaskSpaceToken = Symbol('rollbackCreatedTaskSpace')
+const describeMissingPageToken = Symbol('describeMissingPage')
 
 const defaultGate: OperationGate = {
   withSpace: defaultWithSpace,
@@ -690,6 +757,17 @@ const baseDefaultServices: Omit<PageModelServices, 'ledger' | 'pageBudget'> = {
   setPreferredTarget,
   supportsBackgroundPageDiscovery: isBrowserRuntime,
   subscribeBrowserEvents,
+  subscribePageEvents,
+  prepareDownload(targetId, options) {
+    return preparePageDownload(
+      {
+        cdp: baseDefaultServices.cdp,
+        subscribePageEvents,
+      },
+      targetId,
+      options,
+    )
+  },
   now: () => state.now(),
   async sleep(ms) {
     await state.sleep(ms)
@@ -766,6 +844,7 @@ class TaskSpace {
   #userPage?: Page | UnmanagedPage
   #stopBrowserEvents?: () => void
   #backgroundDiscoveryInitialized = false
+  #finished = false
 
   constructor(descriptor: TaskSpaceDescriptor, services: PageModelServices) {
     this.taskId = descriptor.taskId
@@ -949,14 +1028,14 @@ class TaskSpace {
   }
 
   /** Finish the task with an explicit managed-Page retention policy. */
-  async finish(options: FinishOptions): Promise<void> {
+  async finish(options: FinishOptions): Promise<TaskFinishReceipt> {
     validatePublicApiOptions('TaskSpace.finish', options)
     if (!Object.hasOwn(options, 'keep') || options.keep === undefined) {
       throw new TypeError(
         'task.finish requires the keep option. Expected: await task.finish({ keep })',
       )
     }
-    await this.#services.gate.withSpace(this.spaceId, async () => {
+    return this.#services.gate.withSpace(this.spaceId, async () => {
       const { ledger, tabs } = await this.#reconcilePages()
       const keepLabels =
         options.keep === 'all'
@@ -973,6 +1052,19 @@ class TaskSpace {
       const managedByTarget = new Map(
         Object.values(ledger.pages).map(page => [page.targetId, page]),
       )
+      const labelsToClose = Object.entries(ledger.pages)
+        .filter(
+          ([label, page]) =>
+            page.openedBy === 'agent' && !keepLabels.has(label),
+        )
+        .map(([label]) => label)
+      const closedManagedLabelSet = new Set(labelsToClose)
+      const keptManagedLabels = Object.keys(ledger.pages).filter(
+        label => !closedManagedLabelSet.has(label),
+      )
+      const preservedUnmanagedCount = tabs.filter(
+        tab => !managedByTarget.has(tab.targetId),
+      ).length
       const hasProtectedTabs = tabs.some((tab) => {
         const managed = managedByTarget.get(tab.targetId)
         return !managed || managed.openedBy === 'unknown'
@@ -985,20 +1077,27 @@ class TaskSpace {
       ) {
         await this.#services.closeTaskSpace()
         await this.#discardTerminalState()
-        return
+        return {
+          spaceId: this.spaceId,
+          closedSpace: true,
+          keptManagedLabels: [],
+          closedManagedLabels: labelsToClose,
+          preservedUnmanagedCount,
+        }
       }
 
-      const labelsToClose = Object.entries(ledger.pages)
-        .filter(
-          ([label, page]) =>
-            page.openedBy === 'agent' && !keepLabels.has(label),
-        )
-        .map(([label]) => label)
       for (const label of labelsToClose) {
         await this.page(label).close()
       }
       await this.#services.completeTaskSpace()
       await this.#discardTerminalState()
+      return {
+        spaceId: this.spaceId,
+        closedSpace: false,
+        keptManagedLabels,
+        closedManagedLabels: labelsToClose,
+        preservedUnmanagedCount,
+      }
     })
   }
 
@@ -1010,9 +1109,45 @@ class TaskSpace {
   }
 
   async #discardTerminalState(): Promise<void> {
+    this.#finished = true
     await this.#services.ledger.discard(this.spaceId)
     this.#stopBackgroundPageDiscovery()
     clearSpacePageNotices(this.spaceId)
+  }
+
+  /**
+   * Explain an unknown Page label in task-lifecycle terms: the same ledger miss
+   * means "never created" during a task but "already ended" after finish().
+   */
+  async [describeMissingPageToken](
+    label: string,
+    error: unknown,
+  ): Promise<unknown> {
+    if (
+      !(error instanceof Error) ||
+      error.message !== `page label not found: ${label}`
+    ) {
+      return error
+    }
+    if (this.#finished) {
+      return new Error(
+        `${error.message}. Task space ${this.id} already finished, which ended its Page labels; do not use Pages after task.finish()`,
+        { cause: error },
+      )
+    }
+    if (this.ownership !== 'agent') {
+      return new Error(
+        `${error.message}. Task space ${this.id} is owned by the user, so labels from a finished Agent task no longer exist; stop operating it unless the user asks you to continue`,
+        { cause: error },
+      )
+    }
+    const labels = Object.keys(
+      (await this.#services.ledger.read(this.id)).pages,
+    )
+    return new Error(
+      `${error.message}. Managed Pages in task space ${this.id}: ${labels.join(', ') || 'none'}. task.page(label) only refers to an existing Page; create one with await task.newPage()`,
+      { cause: error },
+    )
   }
 
   /** Send a Target or Browser domain command within this selected space. */
@@ -1334,6 +1469,15 @@ type PendingFileChooser = {
   arm: Promise<ArmedFileChooser>
 }
 
+type ArmedDownload = {
+  page: PageTarget
+  interception: DownloadInterception
+}
+
+type PendingDownload = {
+  arm: Promise<ArmedDownload>
+}
+
 /** A file chooser intercepted before Chromium can open a native dialog. */
 class FileChooser {
   readonly #services: PageModelServices
@@ -1382,6 +1526,49 @@ class FileChooser {
   }
 }
 
+/** A Page download backed by a round-local artifact. */
+class Download {
+  readonly #pageHandle: Page
+  readonly #artifact: DownloadArtifact
+
+  constructor(page: Page, artifact: DownloadArtifact) {
+    this.#pageHandle = page
+    this.#artifact = artifact
+  }
+
+  page(): Page {
+    return this.#pageHandle
+  }
+
+  url(): string {
+    return this.#artifact.url
+  }
+
+  suggestedFilename(): string {
+    return this.#artifact.suggestedFilename
+  }
+
+  saveAs(path: string): Promise<void> {
+    return this.#artifact.saveAs(path)
+  }
+
+  path(): Promise<string> {
+    return this.#artifact.path()
+  }
+
+  failure(): Promise<string | null> {
+    return this.#artifact.failure()
+  }
+
+  cancel(): Promise<void> {
+    return this.#artifact.cancel()
+  }
+
+  delete(): Promise<void> {
+    return this.#artifact.delete()
+  }
+}
+
 class Page {
   readonly label: string
   readonly spaceId: number
@@ -1393,6 +1580,8 @@ class Page {
   #targetId?: string
   #openedBy?: PageOrigin
   #pendingFileChooser?: PendingFileChooser
+  #pendingDownload?: PendingDownload
+  #activeDownload?: Promise<void>
 
   constructor(
     task: TaskSpace,
@@ -1476,12 +1665,63 @@ class Page {
 
   async snapshot(options: PageSnapshotOptions = {}): Promise<string> {
     validatePublicApiOptions('Page.snapshot', options)
+    const rootRefId =
+      options.scope === 'subtree' && options.root !== undefined
+        ? parseRef(options.root)
+        : undefined
+    if (options.scope === 'subtree' && options.root === undefined) {
+      throw pageSnapshotOptionsError(
+        'page.snapshot subtree scope requires root to be a snapshot ref such as @21',
+      )
+    }
+    if (options.scope !== 'subtree' && options.root !== undefined) {
+      throw pageSnapshotOptionsError(
+        'page.snapshot root is only supported when scope is subtree',
+      )
+    }
+    if (options.root !== undefined && !rootRefId) {
+      throw pageSnapshotOptionsError(
+        'page.snapshot root must be a snapshot ref such as @21',
+      )
+    }
     const page = await this.#resolve()
     return this.#services.gate.withPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId)
+      let root: number | undefined
+      let rootContext:
+        | {
+          frameId?: string
+          frameProvenance?: 'page' | 'frame' | 'unknown'
+        }
+        | undefined
+      if (rootRefId) {
+        const refs = await this.#refMapForAction(
+          page,
+          sessionId,
+          options.root!,
+        )
+        const entry = refs.get(rootRefId)
+        if (!entry) {
+          throw new ElementResolutionError(
+            `Unknown ref: ${options.root}`,
+            'permanent',
+          )
+        }
+        root = entry.backendNodeId
+        rootContext = {
+          ...(entry.frameId ? { frameId: entry.frameId } : {}),
+          ...(entry.frameProvenance
+            ? { frameProvenance: entry.frameProvenance }
+            : {}),
+        }
+      }
+      const { root: _root, ...snapshotOptions } = options
+      const snapshotScope = options.scope ?? 'only_within_viewport'
+      const beforeDocuments = await this.#pageDocuments(page, sessionId)
       const result = await this.#services.snapshot({
-        ...options,
-        scope: options.scope ?? 'only_within_viewport',
+        ...snapshotOptions,
+        ...(root === undefined ? {} : { root }),
+        scope: snapshotScope,
         includeActionMarks: options.includeActionMarks ?? true,
         includeStableLocator: options.includeStableLocator ?? true,
       })
@@ -1494,8 +1734,32 @@ class Page {
         sessionId,
         iframeSessions,
         result,
+        rootContext,
       )
-      this.#services.pageRefs.replace(page.targetId, result?.refs || [])
+      const documents = await this.#pageDocuments(page, sessionId)
+      for (const ref of result?.refs || []) {
+        const documentId = pageRefDocumentId(ref, documents)
+        if (
+          !documentId ||
+          documentId !== pageRefDocumentId(ref, beforeDocuments)
+        ) {
+          throw new ElementResolutionError(
+            'Page changed during snapshot; take a new snapshot',
+            'transient',
+          )
+        }
+        ref.documentId = documentId
+      }
+      await this.#loadRefs(page)
+      this.#services.pageRefs.invalidateChangedDocuments(
+        page.targetId,
+        documents,
+      )
+      await this.#registerSnapshotRefs(
+        page,
+        result,
+        snapshotScope === 'full_page',
+      )
       const content = result?.content || ''
       const header = await this.#snapshotHeader(page)
       return `${header}\n${content}`
@@ -1520,16 +1784,19 @@ class Page {
     )
   }
 
-  /** Wait for the next popup opened by this Page. */
+  /** Wait for the next popup or download started by this Page. */
   waitForEvent(
-    event: 'popup',
+    event: 'popup' | 'download',
     options: PageWaitForEventOptions = {},
-  ): Promise<Page> {
-    if (event !== 'popup') {
-      throw new TypeError('page.waitForEvent only supports the popup event')
+  ): Promise<Page | Download> {
+    if (event !== 'popup' && event !== 'download') {
+      throw new TypeError(
+        'page.waitForEvent only supports the popup and download events',
+      )
     }
     validatePublicApiOptions('Page.waitForEvent', options)
     const timeoutMs = options.timeout ?? 10_000
+    if (event === 'download') return this.#waitForDownload(timeoutMs)
 
     // Subscribe synchronously so the common `const pending = waitForEvent();
     // await click()` pattern cannot miss a popup created by the click.
@@ -1576,6 +1843,52 @@ class Page {
         void this.#resolve().catch(error => finish(() => reject(error)))
       }
     })
+  }
+
+  #waitForDownload(timeoutMs: number): Promise<Download> {
+    if (this.#pendingDownload || this.#activeDownload) {
+      throw new Error('this Page already has an active download wait')
+    }
+    const pending: PendingDownload = {
+      arm: (async () => {
+        const page = await this.#resolve()
+        return this.#services.gate.withPage(page, async ({ sessionId }) => {
+          const interception = this.#services.prepareDownload(page.targetId, {
+            timeoutMs,
+          })
+          try {
+            await interception.ready(sessionId)
+            return { page, interception }
+          } catch (error) {
+            await interception.dispose(asError(error))
+            throw error
+          }
+        })
+      })(),
+    }
+    this.#pendingDownload = pending
+    return (async () => {
+      let armed: ArmedDownload | undefined
+      try {
+        armed = await pending.arm
+        const artifact = await armed.interception.event
+        const active = artifact.finished.finally(() => {
+          if (this.#activeDownload === active) {
+            this.#activeDownload = undefined
+          }
+        })
+        this.#activeDownload = active
+        void active.catch(() => {})
+        return new Download(this, artifact)
+      } catch (error) {
+        if (armed) await armed.interception.dispose(asError(error))
+        throw error
+      } finally {
+        if (this.#pendingDownload === pending) {
+          this.#pendingDownload = undefined
+        }
+      }
+    })()
   }
 
   /** Wait without activating this Page or occupying the native operation gate. */
@@ -1735,7 +2048,7 @@ class Page {
       } finally {
         // The predicate may mutate the DOM, so snapshot refs are no longer
         // guaranteed to identify the same elements.
-        this.#services.pageRefs.clear(page.targetId)
+        await this.#invalidateRefs(page)
       }
       throw waitForFunctionTimeoutError(
         this.spaceId,
@@ -1808,7 +2121,7 @@ class Page {
       } finally {
         // Raw CDP can navigate or mutate the document, so existing refs are no
         // longer safe even when the command looked observational.
-        this.#services.pageRefs.clear(page.targetId)
+        await this.#invalidateRefs(page)
       }
     })
   }
@@ -1822,16 +2135,14 @@ class Page {
     return this.#services.gate.withPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId)
       const refMap = await this.#refMapForAction(page, sessionId, selector)
-      const iframeSessions = await this.#services.ensureFrameSessions(
-        page.targetId,
-      )
       return waitForSelectorInPage(
         this.#services,
         sessionId,
         refMap,
         selector,
         options,
-        iframeSessions,
+        timeoutMs =>
+          this.#services.ensureFrameSessions(page.targetId, timeoutMs),
       )
     })
   }
@@ -1847,7 +2158,7 @@ class Page {
       try {
         await waitForLoadStateInPage(this.#services, sessionId, state, options)
       } finally {
-        this.#services.pageRefs.clear(page.targetId)
+        await this.#invalidateRefs(page)
       }
     })
   }
@@ -1863,8 +2174,8 @@ class Page {
   async screenshot(options: PageScreenshotOptions = {}): Promise<string> {
     validatePublicApiOptions('Page.screenshot', options)
     const { path, fullPage, ...captureOptions } = options
-    if (path !== undefined && (typeof path !== 'string' || path.length === 0)) {
-      throw new TypeError('page.screenshot path must be a non-empty string')
+    if (path !== undefined) {
+      assertAbsoluteFilePath(path, 'page.screenshot path')
     }
     const page = await this.#resolve()
     return this.#services.gate.withPage(page, async ({ sessionId }) => {
@@ -1886,9 +2197,9 @@ class Page {
     validatePublicApiOptions('Page.click', options)
     return this.#runAction(
       selector,
-      (sessionId, refMap, iframeSessions) =>
+      (sessionId, refMap, iframeSessions, services) =>
         clickInPage(
-          this.#services,
+          services,
           sessionId,
           refMap,
           selector,
@@ -1911,9 +2222,9 @@ class Page {
     validatePublicApiOptions('Page.dblclick', options)
     return this.#runAction(
       selector,
-      (sessionId, refMap, iframeSessions) =>
+      (sessionId, refMap, iframeSessions, services) =>
         clickInPage(
-          this.#services,
+          services,
           sessionId,
           refMap,
           selector,
@@ -1936,9 +2247,9 @@ class Page {
     validatePublicApiOptions('Page.hover', options)
     return this.#runAction(
       selector,
-      (sessionId, refMap, iframeSessions) =>
+      (sessionId, refMap, iframeSessions, services) =>
         hoverInPage(
-          this.#services,
+          services,
           sessionId,
           refMap,
           selector,
@@ -1958,9 +2269,9 @@ class Page {
     validatePublicApiOptions('Page.dragAndDrop', options)
     return this.#runAction(
       [sourceSelector, targetSelector],
-      (sessionId, refMap, iframeSessions) =>
+      (sessionId, refMap, iframeSessions, services) =>
         dragAndDropInPage(
-          this.#services,
+          services,
           sessionId,
           refMap,
           sourceSelector,
@@ -1981,9 +2292,9 @@ class Page {
     validatePublicApiOptions('Page.fill', options)
     return this.#runAction(
       selector,
-      (sessionId, refMap, iframeSessions) =>
+      (sessionId, refMap, iframeSessions, services) =>
         fillInPage(
-          this.#services,
+          services,
           sessionId,
           refMap,
           selector,
@@ -2010,37 +2321,24 @@ class Page {
     choices.forEach(validateSelectOptionChoice)
     const timeoutMs = options.timeout ?? DEFAULT_PAGE_ACTION_TIMEOUT_MS
     const page = await this.#resolve()
-    return this.#runInputBoundary(page, async (sessionId) => {
-      const deadline = this.#services.now() + timeoutMs
-      while (true) {
-        try {
-          const refMap = await this.#refMapForAction(page, sessionId, selector)
-          const iframeSessions = await this.#services.ensureFrameSessions(
-            page.targetId,
-          )
-          return await selectOptionInPage(
-            this.#services,
+    return this.#runInputBoundary(page, sessionId =>
+      this.#retryElementAction(
+        'page.selectOption',
+        timeoutMs,
+        sessionId,
+        remainingMs =>
+          this.#resolveActionTargets(page, sessionId, remainingMs, selector),
+        ({ refMap, iframeSessions }, services) =>
+          selectOptionInPage(
+            services,
             sessionId,
             refMap,
             selector,
             choices,
             iframeSessions,
-          )
-        } catch (error) {
-          if (!isRetryableElementStateError(error)) throw error
-          const remainingMs = deadline - this.#services.now()
-          if (remainingMs <= 0) {
-            throw new ElementResolutionError(
-              `page.selectOption timed out after ${timeoutMs}ms: ${error.message}`,
-              'transient',
-            )
-          }
-          await this.#services.sleep(
-            Math.min(PAGE_ACTION_RESOLUTION_RETRY_MS, remainingMs),
-          )
-        }
-      }
-    })
+          ),
+      ),
+    )
   }
 
   async focus(
@@ -2050,14 +2348,8 @@ class Page {
     validatePublicApiOptions('Page.focus', options)
     return this.#runAction(
       selector,
-      (sessionId, refMap, iframeSessions) =>
-        focusInPage(
-          this.#services,
-          sessionId,
-          refMap,
-          selector,
-          iframeSessions,
-        ),
+      (sessionId, refMap, iframeSessions, services) =>
+        focusInPage(services, sessionId, refMap, selector, iframeSessions),
       { actionName: 'page.focus', timeout: options.timeout },
     )
   }
@@ -2071,9 +2363,9 @@ class Page {
     const { timeout, ...pressOptions } = options
     return this.#runAction(
       selector,
-      async (sessionId, refMap, iframeSessions) => {
+      async (sessionId, refMap, iframeSessions, services) => {
         await focusInPage(
-          this.#services,
+          services,
           sessionId,
           refMap,
           selector,
@@ -2095,9 +2387,9 @@ class Page {
   ): Promise<PageActionReceipt> {
     return this.#runAction(
       selector,
-      (sessionId, refMap, iframeSessions) =>
+      (sessionId, refMap, iframeSessions, services) =>
         setInputFilesInPage(
-          this.#services,
+          services,
           sessionId,
           refMap,
           selector,
@@ -2201,7 +2493,11 @@ class Page {
   }
 
   async #resolve(): Promise<PageTarget> {
-    const entry = await this.#services.ledger.getPage(this.spaceId, this.label)
+    const entry = await this.#services.ledger
+      .getPage(this.spaceId, this.label)
+      .catch(async (error) => {
+        throw await this.#task[describeMissingPageToken](this.label, error)
+      })
     this.#targetId = entry.targetId
     this.#openedBy = entry.openedBy
     markPageObserved(this.spaceId, entry.targetId)
@@ -2224,38 +2520,34 @@ class Page {
     return this.#services.gate.withPage(page, async ({ sessionId }) => {
       if (activate) await this.#activate(page.targetId)
       try {
-        try {
-          return await evaluateInSession<T>(
-            this.#services,
-            sessionId,
-            expression,
-            hasArgument,
-            serializedArgument,
-            PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS,
+        return await evaluateInSession<T>(
+          this.#services,
+          sessionId,
+          expression,
+          hasArgument,
+          serializedArgument,
+          PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS,
+          PAGE_EVALUATE_EXECUTION_TIMEOUT_MS,
+        )
+      } catch (error) {
+        if (isEvaluationExecutionDeadlineError(error)) {
+          throw evaluationExecutionDeadlineError(
+            'page.evaluate',
             PAGE_EVALUATE_EXECUTION_TIMEOUT_MS,
           )
-        } catch (error) {
-          if (isEvaluationExecutionDeadlineError(error)) {
-            throw evaluationExecutionDeadlineError(
-              'page.evaluate',
-              PAGE_EVALUATE_EXECUTION_TIMEOUT_MS,
-            )
-          }
-          if (isRuntimeEvaluateTransportTimeout(error)) {
-            throw await recoverPageEvaluationTimeout(
-              this.#services,
-              sessionId,
-              'page.evaluate',
-              PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS,
-            )
-          }
-          if (typeof expression === 'function') {
-            throw enrichPageCallbackReferenceError(error, 'page.evaluate')
-          }
-          throw error
         }
-      } finally {
-        if (activate) this.#services.pageRefs.clear(page.targetId)
+        if (isRuntimeEvaluateTransportTimeout(error)) {
+          throw await recoverPageEvaluationTimeout(
+            this.#services,
+            sessionId,
+            'page.evaluate',
+            PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS,
+          )
+        }
+        if (typeof expression === 'function') {
+          throw enrichPageCallbackReferenceError(error, 'page.evaluate')
+        }
+        throw error
       }
     })
   }
@@ -2266,6 +2558,7 @@ class Page {
       sessionId: string,
       refMap: RefMap,
       iframeSessions: Map<string, string>,
+      services: PageModelServices,
     ) => Promise<void>,
     options: {
       actionName?: string
@@ -2279,38 +2572,105 @@ class Page {
     const actionName = options.actionName ?? 'page action'
     const { receipt } = await this.#runActionBoundary(
       page,
-      async (sessionId) => {
-        const deadline = this.#services.now() + timeoutMs
-        while (true) {
-          try {
-            const refMap = await this.#refMapForAction(
+      sessionId =>
+        this.#retryElementAction(
+          actionName,
+          timeoutMs,
+          sessionId,
+          remainingMs =>
+            this.#resolveActionTargets(
               page,
               sessionId,
+              remainingMs,
               ...selectors,
-            )
-            const iframeSessions = await this.#services.ensureFrameSessions(
-              page.targetId,
-            )
-            await operation(sessionId, refMap, iframeSessions)
-            return
-          } catch (error) {
-            if (!isRetryableElementStateError(error)) throw error
-            const remainingMs = deadline - this.#services.now()
-            if (remainingMs <= 0) {
-              throw new ElementResolutionError(
-                `${actionName} timed out after ${timeoutMs}ms: ${error.message}`,
-                'transient',
-              )
-            }
-            await this.#services.sleep(
-              Math.min(PAGE_ACTION_RESOLUTION_RETRY_MS, remainingMs),
-            )
-          }
-        }
-      },
+            ),
+          ({ refMap, iframeSessions }, services) =>
+            operation(sessionId, refMap, iframeSessions, services),
+        ),
       options.guardFileChooser,
     )
     return receipt
+  }
+
+  async #resolveActionTargets(
+    page: PageTarget,
+    sessionId: string,
+    remainingMs: number,
+    ...selectors: string[]
+  ): Promise<{ refMap: RefMap; iframeSessions: Map<string, string> }> {
+    const refMap = await this.#refMapForAction(page, sessionId, ...selectors)
+    const iframeSessions = await this.#services.ensureFrameSessions(
+      page.targetId,
+      Math.max(1, remainingMs),
+    )
+    return { refMap, iframeSessions }
+  }
+
+  /** Services whose CDP transport reports the first `Input.*` command. */
+  #inputTrackingServices(onInput: () => void): PageModelServices {
+    const services = this.#services
+    return {
+      ...services,
+      cdp(method, params, sessionId, timeoutMs) {
+        if (method.startsWith('Input.')) onInput()
+        return services.cdp(method, params, sessionId, timeoutMs)
+      },
+    }
+  }
+
+  /**
+   * Retry an element action until its deadline. Until the first `Input.*`
+   * command reaches the page, failures may include a vanished frame or a lost
+   * iframe session and are retried after rediscovering frames. Once input was
+   * dispatched only element-state transients are retried, so a gesture that
+   * already reached the page is never dispatched twice.
+   */
+  async #retryElementAction<Prepared, Result>(
+    actionName: string,
+    timeoutMs: number,
+    pageSessionId: string,
+    prepare: (remainingMs: number) => Promise<Prepared>,
+    perform: (
+      prepared: Prepared,
+      services: PageModelServices,
+    ) => Promise<Result>,
+  ): Promise<Result> {
+    const deadline = this.#services.now() + timeoutMs
+    let lastBlocker: Error | undefined
+    while (true) {
+      let inputDispatched = false
+      const services = this.#inputTrackingServices(() => {
+        inputDispatched = true
+      })
+      try {
+        const prepared = await prepare(deadline - this.#services.now())
+        return await perform(prepared, services)
+      } catch (error) {
+        const remainingMs = deadline - this.#services.now()
+        // Frame discovery runs on the remaining budget; a transport timeout at
+        // the deadline is this action's timeout, reported with the last real
+        // blocker rather than as a CDP failure.
+        const exhausted =
+          !inputDispatched &&
+          isCdpRequestTimeoutError(error) &&
+          remainingMs <= 0
+        const retryable = inputDispatched
+          ? isRetryableElementStateError(error)
+          : isRetryableResolutionError(error, pageSessionId)
+        if (!retryable && !exhausted) throw error
+        if (remainingMs <= 0) {
+          const blocker = exhausted && lastBlocker ? lastBlocker : error
+          throw new ElementResolutionError(
+            `${actionName} timed out after ${timeoutMs}ms: ${blocker.message}`,
+            'transient',
+          )
+        }
+        lastBlocker = error
+        await this.#services.sleep(
+          Math.min(PAGE_ACTION_RESOLUTION_RETRY_MS, remainingMs),
+        )
+      }
+    }
   }
 
   async #runRawAction(
@@ -2353,7 +2713,7 @@ class Page {
         )
         // A handled dialog resumes its callback and may mutate the DOM. A
         // no-dialog response leaves the page untouched, so its refs stay valid.
-        this.#services.pageRefs.clear(page.targetId)
+        await this.#invalidateRefs(page)
         return true
       } catch (error) {
         if (isNoJavaScriptDialogError(error)) return false
@@ -2368,11 +2728,7 @@ class Page {
   ): Promise<T> {
     return this.#services.gate.withPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId)
-      try {
-        return await operation(sessionId)
-      } finally {
-        this.#services.pageRefs.clear(page.targetId)
-      }
+      return operation(sessionId)
     })
   }
 
@@ -2381,6 +2737,13 @@ class Page {
     operation: (sessionId: string) => Promise<T>,
     guardFileChooser = false,
   ): Promise<{ value: T; receipt: PageActionReceipt }> {
+    const explicitDownload = this.#pendingDownload
+    const armedDownload = explicitDownload
+      ? await explicitDownload.arm
+      : undefined
+    if (armedDownload && armedDownload.page.targetId !== page.targetId) {
+      throw new Error('download waiter belongs to a different Page')
+    }
     const explicitFileChooser = guardFileChooser
       ? this.#pendingFileChooser
       : undefined
@@ -2392,6 +2755,7 @@ class Page {
     }
     return this.#services.gate.withPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId)
+      await armedDownload?.interception.ready(sessionId)
       const fileChooserGuard =
         guardFileChooser && !explicitFileChooser
           ? this.#services.prepareFileChooser(sessionId, {
@@ -2455,7 +2819,6 @@ class Page {
         }
       } finally {
         await fileChooserGuard?.dispose()
-        this.#services.pageRefs.clear(page.targetId)
       }
     })
   }
@@ -2465,29 +2828,134 @@ class Page {
     sessionId: string,
     ...selectors: string[]
   ): Promise<RefMap> {
-    let refs = this.#services.pageRefs.forTarget(page.targetId)
-    const missingRef = selectors.some((selector) => {
-      const refId = parseRef(selector)
-      return Boolean(refId && !refs.get(refId))
-    })
-    if (!missingRef) return refs
-
-    const result = await this.#services.snapshot({
-      scope: 'full_page',
-      includeActionMarks: true,
-      includeStableLocator: true,
-    })
-    const iframeSessions =
-      Array.isArray(result?.refs) && result.refs.length > 0
-        ? await this.#services.ensureFrameSessions(page.targetId)
-        : new Map<string, string>()
-    await preparePageSnapshotResult(
-      this.#services,
-      sessionId,
-      iframeSessions,
-      result,
+    if (!selectors.some(selector => parseRef(selector))) {
+      return this.#services.pageRefs.forTarget(page.targetId)
+    }
+    await this.#loadRefs(page)
+    const registry = this.#services.pageRefs
+    registry.invalidateChangedDocuments(
+      page.targetId,
+      await this.#pageDocuments(page, sessionId),
     )
-    refs = this.#services.pageRefs.replace(page.targetId, result?.refs || [])
+    await this.#saveRefs(page)
+    const refs = registry.forTarget(page.targetId)
+    for (const selector of selectors) {
+      const refId = parseRef(selector)
+      if (!refId) continue
+      if (registry.isInvalidated(page.targetId, refId)) {
+        throw new ElementResolutionError(
+          `Stale ref: @${refId}; take a new snapshot`,
+          'permanent',
+        )
+      }
+      if (!refs.get(refId)) {
+        throw new ElementResolutionError(
+          `Unknown ref: ${refId}; take a new snapshot`,
+          'permanent',
+        )
+      }
+    }
+    return refs
+  }
+
+  async #pageDocuments(
+    page: PageTarget,
+    sessionId: string,
+  ): Promise<Map<string, string>> {
+    const iframeSessions = await this.#services.ensureFrameSessions(
+      page.targetId,
+    )
+    const readTree = async (session: string) => {
+      const response = await this.#services.cdp(
+        'Page.getFrameTree',
+        {},
+        session,
+      )
+      return (response.result || response).frameTree
+    }
+    const tree = await readTree(sessionId)
+    const documents = new Map<string, string>()
+    const visit = (node) => {
+      if (
+        typeof node?.frame?.id !== 'string' ||
+        typeof node.frame.loaderId !== 'string'
+      )
+        return
+      documents.set(
+        node.frame.id,
+        JSON.stringify([
+          tree.frame.id,
+          tree.frame.loaderId,
+          node.frame.id,
+          node.frame.loaderId,
+        ]),
+      )
+      for (const child of node.childFrames || []) visit(child)
+    }
+    visit(tree)
+    const root = documents.get(tree?.frame?.id)
+    if (!root)
+      throw new ElementResolutionError(
+        'Cannot verify Page document; take a new snapshot',
+        'transient',
+      )
+    // The Page tree excludes out-of-process frames. A failed session read must
+    // reach the retry boundary, not persistently expire refs in a live frame.
+    const frames = await Promise.all(
+      [...new Set(iframeSessions.values())]
+        .filter(session => session !== sessionId)
+        .map(readTree),
+    )
+    for (const frame of frames) visit(frame)
+    documents.set('', root)
+    return documents
+  }
+
+  async #loadRefs(page: PageTarget): Promise<void> {
+    const stored = await this.#services.ledger.getPage(
+      page.spaceId,
+      this.label,
+    )
+    this.#services.pageRefs.restore(page.targetId, stored.refs)
+  }
+
+  async #saveRefs(page: PageTarget): Promise<void> {
+    const refs = this.#services.pageRefs.exportState(page.targetId)
+    if (refs)
+      await this.#services.ledger.setPageRefs(page.spaceId, this.label, refs)
+  }
+
+  async #invalidateRefs(page: PageTarget): Promise<void> {
+    await this.#loadRefs(page)
+    this.#services.pageRefs.invalidate(page.targetId)
+    await this.#saveRefs(page)
+  }
+
+  async #registerSnapshotRefs(
+    page: PageTarget,
+    result: any,
+    replace: boolean,
+  ): Promise<RefMap> {
+    const nativeRefs = result?.refs || []
+    const originalIds = nativeRefs.map(ref =>
+      String(ref.refId ?? ref.backendNodeId),
+    )
+    const registry = this.#services.pageRefs
+    const refs = replace
+      ? registry.replace(page.targetId, nativeRefs)
+      : registry.merge(page.targetId, nativeRefs)
+    if (typeof result?.content === 'string') {
+      result.content = rewriteSnapshotRefIds(
+        result.content,
+        new Map(
+          nativeRefs.map((ref, index) => [
+            originalIds[index],
+            String(ref.refId),
+          ]),
+        ),
+      )
+    }
+    await this.#saveRefs(page)
     return refs
   }
 
@@ -2515,6 +2983,11 @@ class Page {
     await this.#services.cdp('Target.activateTarget', { targetId })
     this.#services.setPreferredTarget(targetId)
   }
+}
+
+function pageSnapshotOptionsError(message: string): TypeError {
+  const signature = publicApiEntry('Page.snapshot')?.signature
+  return new TypeError(`${message}. Expected: ${signature}`)
 }
 
 function snapshotSourceHeader(input: {
@@ -2911,12 +3384,25 @@ function serializeJsonValue(value: unknown, message: string): unknown {
   }
 }
 
+// The script does not run in the caller's shell working directory: the host
+// starts the Node context from the application's own directory, which is not
+// writable on Windows. Reject relative paths up front instead of surfacing a
+// confusing EPERM from that directory.
+function assertAbsoluteFilePath(path: unknown, label: string): void {
+  if (typeof path !== 'string' || path.length === 0 || !isAbsolute(path)) {
+    throw new TypeError(`${label} must be an absolute file path`)
+  }
+}
+
 function pageFetchPayload(
   url: string,
   options: PageFetchOptions,
 ): { payload: PageFetchPayload; saveAs?: string } {
   validatePublicApiOptions('Page.fetch', options)
   const { timeout = 20_000, saveAs, ...requestOptions } = options
+  if (saveAs !== undefined) {
+    assertAbsoluteFilePath(saveAs, 'page.fetch saveAs')
+  }
   return {
     payload: {
       url,

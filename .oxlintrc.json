@@ -322,7 +322,7 @@
       ]
     },
     {
-      // ego-browser is a ported upstream codebase (v2.0.0-beta.4, strict:false):
+      // ego-browser is a ported upstream codebase (v2.1.0-beta.2, strict:false):
       // its files keep the upstream @ts-nocheck marker and loose CDP payload
       // types until the port is hardened against the repository strict profile.
       "files": [

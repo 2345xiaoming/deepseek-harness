@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.0.0-beta.4 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 import { parseRef, RefMap } from './ref-map.ts'
 
 export const browserRefMap = new RefMap()
