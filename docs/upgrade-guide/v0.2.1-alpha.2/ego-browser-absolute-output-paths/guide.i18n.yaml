@@ -1,13 +1,13 @@
 # Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
 # section, a hash of its English and Chinese blocks outside code blocks and generated regions.
 # After editing either side, bring the other along and re-record with:
-#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.1-alpha.1/ego-browser-absolute-output-paths/guide.md
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.1-alpha.2/ego-browser-absolute-output-paths/guide.md
 /:
   en: 335ea7b375708739
   zh: 141dc86c593414e2
 /ego-browser-output-paths-must-be-absolute:
-  en: 1d32e7d53f8055d2
-  zh: 0729cbe3527ff0e4
+  en: c68bcc51eae61b88
+  zh: c28f112449d2ae91
 /ego-browser-output-paths-must-be-absolute/change:
   en: 9efabacc7288afdf
   zh: baf58650eb14e78a
