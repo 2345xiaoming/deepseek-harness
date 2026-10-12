@@ -72,7 +72,7 @@ async function connect(): Promise<WebSocket> {
     if (!url) throw new Error('dsh-ego-browser: /json/version returned no webSocketDebuggerUrl')
     const socket = new WebSocket(url)
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('dsh-ego-browser: WS open timeout')), 8000)
+      const timer = setTimeout(() => { reject(new Error('dsh-ego-browser: WS open timeout')) }, 8000)
       socket.onopen = () => {
         clearTimeout(timer)
         resolve()
@@ -89,7 +89,7 @@ async function connect(): Promise<WebSocket> {
     socket.onmessage = (event) => {
       let data: Record<string, unknown>
       try {
-        data = JSON.parse(String(event.data))
+        data = JSON.parse(String(event.data)) as Record<string, unknown>
       } catch {
         return
       }
@@ -214,7 +214,10 @@ export async function createTab(url = 'about:blank'): Promise<{ targetId: string
       reject(new Error('dsh-ego-browser: Target.createTarget timeout'))
     }, 8000)
     pendingResponses.set(id, {
-      resolve: result => resolve((result as { targetId?: string }) ?? null),
+      resolve: (result) => {
+        const targetId = typeof result.targetId === 'string' ? result.targetId : undefined
+        resolve(targetId === undefined ? null : { targetId })
+      },
       reject,
       timer,
     })
@@ -230,7 +233,7 @@ function isAlive(): boolean {
   return !disposed && Boolean(ws && ws.readyState === WebSocket.OPEN)
 }
 
-async function dispose(): Promise<void> {
+function dispose(): Promise<void> {
   disposed = true
   messageHandler = null
   errorHandler = null
@@ -243,6 +246,7 @@ async function dispose(): Promise<void> {
     ws = null
   }
   rejectAllPending(new Error('dsh-ego-browser: bridge disposed'))
+  return Promise.resolve()
 }
 
 /** Reject every in-flight request (used on connection loss and dispose). */
@@ -348,16 +352,16 @@ function createTaskSpaceShim(): Pick<
   }
 
   return {
-    listTaskSpaces: async () => {
+    listTaskSpaces: () => {
       seedIfEmpty()
-      return { taskSpaces: [...spaces.values()].map(cloneShimTaskSpace) }
+      return Promise.resolve({ taskSpaces: [...spaces.values()].map(cloneShimTaskSpace) })
     },
-    listProfiles: async () => ({
+    listProfiles: () => Promise.resolve({
       profiles: [{ id: 'default', name: 'default', isDefault: true }],
     }),
     // Re-creating an existing name returns that space instead of adding a second
     // one with the same name, which would make name-based lookup ambiguous.
-    createTaskSpace: async (name: string, profileId?: string) => {
+    createTaskSpace: (name: string, profileId?: string) => {
       const requested = name || defaultName()
       let space = find(undefined, requested)
       if (!space) {
@@ -374,36 +378,38 @@ function createTaskSpaceShim(): Pick<
       }
       if (profileId !== undefined) space.profileId = profileId
       currentId = space.id
-      return cloneShimTaskSpace(space)
+      return Promise.resolve(cloneShimTaskSpace(space))
     },
-    useTaskSpace: async (id: number) => {
+    useTaskSpace: (id: number) => {
       if (!spaces.has(id)) {
-        throw new Error(`unknown task space id: ${id}`)
+        return Promise.reject(new Error(`unknown task space id: ${id}`))
       }
       currentId = id
+      return Promise.resolve()
     },
-    claimTaskSpace: async (id?: number, name?: string) => {
+    claimTaskSpace: (id?: number, name?: string) => {
       const space = find(id, name) ?? current()
       space.ownership = 'agent'
       space.createdBy = 'agent'
       currentId = space.id
-      return cloneShimTaskSpace(space)
+      return Promise.resolve(cloneShimTaskSpace(space))
     },
     // completeTaskSpace dismisses the agent overlay; the space itself stays.
-    completeTaskSpace: async () => ({ done: true }),
-    closeTaskSpace: async () => {
+    completeTaskSpace: () => Promise.resolve({ done: true }),
+    closeTaskSpace: () => {
       const space = current()
       spaces.delete(space.id)
       currentId = spaces.keys().next().value
+      return Promise.resolve()
     },
-    handOffTaskSpace: async () => {
+    handOffTaskSpace: () => {
       current().ownership = 'agentDelegatedToUser'
-      return { done: true }
+      return Promise.resolve({ done: true })
     },
-    takeOverTaskSpace: async () => {
+    takeOverTaskSpace: () => {
       const space = current()
       space.ownership = 'agent'
-      return cloneShimTaskSpace(space)
+      return Promise.resolve(cloneShimTaskSpace(space))
     },
     animationHighlightMouseToPosition: () => undefined,
     setAgentTaskState: () => undefined,

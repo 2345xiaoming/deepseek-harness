@@ -18,7 +18,7 @@ import { helperContext } from './runtime/helpers.ts'
 import { formatCliLogValue } from './runtime/format.ts'
 import { disposeDownloadArtifacts } from './runtime/driver/downloads.ts'
 
-const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
+const AsyncFunction = (async function () {}).constructor as new (
   ...args: string[]
 ) => (...values: unknown[]) => Promise<unknown>
 
@@ -34,17 +34,14 @@ export const Config = z.object({
 })
 
 export function apply(ctx: Context, config: Config): void {
-  if (config.enabled === false) return
+  if (!config.enabled) return
 
   // Install the CDP bridge as globalThis.ego and register all tools. The bridge
   // owns Chrome lifecycle; the disposer (fiber-scoped) tears down WS + Chrome +
   // restores globalThis.ego so hot-reload/unload leaves nothing behind.
   ctx.effect(() => {
     const restoreEgo = installEgoBridge({
-      snapshot: opts =>
-        egoSnapshot(
-          opts as { scope?: 'only_within_viewport' | 'full_page'; maxResultLength?: number },
-        ),
+      snapshot: opts => egoSnapshot(opts),
       disposeChrome,
     })
     return () => {
@@ -108,7 +105,7 @@ function applyBrowserRunTool(ctx: Context): void {
                 chunks.push(`${text}\n`)
               },
             },
-          )
+          ) as Record<string, unknown>
           const names = [...Object.keys(context), 'console']
           const values = [...Object.values(context), capturedConsole]
           const fn = new AsyncFunction(...names, `"use strict";\n${args.js}`)

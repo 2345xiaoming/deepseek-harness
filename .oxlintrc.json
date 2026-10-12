@@ -322,16 +322,44 @@
       ]
     },
     {
-      // ego-browser is a ported upstream codebase (v2.1.0-beta.2, strict:false):
-      // its files keep the upstream @ts-nocheck marker and loose CDP payload
-      // types until the port is hardened against the repository strict profile.
+      // The ported upstream plane of ego-browser (citrolabs/ego-lite v2.1.0-beta.2
+      // package/ego-browser/src): `src/runtime/**` keeps the upstream @ts-nocheck
+      // markers and loose CDP payload types until the port is hardened against the
+      // repository strict profile. Vendored source keeps upstream style and idioms
+      // (see the vendor/** precedent). DSH-authored ego-browser files (src/bridge/**,
+      // src/tools.ts, src/index.ts, tests/**) stay under the strict profile above.
+      // Rules are exactly those the loose upstream typing triggers there.
       "files": [
-        "packages/web/ego-browser/**/*.{ts,tsx}"
+        "packages/web/ego-browser/src/runtime/**/*.{ts,tsx}"
+      ],
+      // The typescript plugin must be enabled in this scope: overrides inherit the
+      // root `plugins: []`, and rules of a disabled plugin are silently ignored.
+      "plugins": [
+        "typescript"
       ],
       "rules": {
         "typescript/ban-ts-comment": "off",
+        "typescript/no-base-to-string": "off",
+        "typescript/no-confusing-void-expression": "off",
         "typescript/no-explicit-any": "off",
-        "typescript/no-non-null-assertion": "off"
+        "typescript/no-non-null-assertion": "off",
+        "typescript/no-redundant-type-constituents": "off",
+        "typescript/no-unnecessary-condition": "off",
+        "typescript/no-unnecessary-type-assertion": "off",
+        "typescript/no-unnecessary-type-conversion": "off",
+        "typescript/no-unsafe-argument": "off",
+        "typescript/no-unsafe-assignment": "off",
+        "typescript/no-unsafe-call": "off",
+        "typescript/no-unsafe-member-access": "off",
+        "typescript/no-unsafe-return": "off",
+        "typescript/no-useless-default-assignment": "off",
+        "typescript/only-throw-error": "off",
+        "typescript/prefer-promise-reject-errors": "off",
+        "typescript/require-await": "off",
+        "typescript/restrict-plus-operands": "off",
+        "typescript/restrict-template-expressions": "off",
+        "typescript/unbound-method": "off",
+        "typescript/use-unknown-in-catch-callback-variable": "off"
       }
     },
     {
