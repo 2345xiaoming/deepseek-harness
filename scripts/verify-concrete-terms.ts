@@ -10,6 +10,16 @@ const root = resolve(import.meta.dirname, '..')
 const blockedTerm = 'prove' + 'nance'
 const excludedPrefixes = ['vendor/', '.agents/notes/archived/'] as const
 
+// The ported ego-browser runtime keeps the upstream harness's own identifiers,
+// so the blocked term names a frame field there rather than an origin label.
+const portedRuntimePrefix = 'packages/web/ego-browser/src/runtime/'
+
+/** Tests that assert that ported field name verbatim. */
+const portedFieldTestFiles: readonly string[] = [
+  'packages/web/ego-browser/tests/page-ref-identity.host.spec.ts',
+  'packages/web/ego-browser/tests/snapshot-result.host.spec.ts',
+]
+
 /** One blocked term occurrence in a tracked path or text line. */
 export interface ConcreteTermViolation {
   /** Repository-relative tracked path. */
@@ -20,6 +30,8 @@ export interface ConcreteTermViolation {
 
 function isExcluded(file: string): boolean {
   return excludedPrefixes.some(prefix => file.startsWith(prefix))
+    || file.startsWith(portedRuntimePrefix)
+    || portedFieldTestFiles.includes(file)
     // Release snapshots retain the identifiers present in their pinned source;
     // historical-format pairing records key sections by those identifiers' headings.
     || /^docs\/persistence-changes\/releases\/dsh-v\d+\.\d+\.\d+-(?:alpha|rc)\.\d+\.schema\.json$/u.test(file)

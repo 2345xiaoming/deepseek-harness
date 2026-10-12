@@ -116,6 +116,7 @@ Local changes to re-apply on a re-port (not accepted upstream; all required on t
 - `learning/index.ts`: the `returns` field is retained; the example text follows upstream (`runSiteTool`/`runSiteBrowserTool` are the flat helpers this package actually exposes).
 - `page-context-guard.ts`: the character class is written `[a-z_$]` (the regex carries `/i`, equivalent to upstream's `[A-Za-z_$]`).
 - Ported-surface lint adaptations: the `clipboard.ts` catch parameter is written `_error`; unused upstream functions in `element-resolver.ts` keep a `no-unused-vars` exemption; the `timer` in `page-model.ts` that a closure reads before it is assigned keeps a `prefer-const` exemption.
+- `driver/keyboard.ts`: the `dispatchKey` JSDoc keeps the synthetic-event consequence but drops upstream's reference to its own issue document, which this repository does not carry.
 - `../index.ts` (this package's entry): binds `help()` text to that `browser_run` output and reclaims download artifacts on dispose.
 
 <a id="model-experience"></a>
@@ -141,6 +142,7 @@ The definitions do not change between requests, so they preserve an already-reus
 
 - The whole of `src/runtime/` is exempt from the repository's strict profile by `// @ts-nocheck`, and the CDP payloads keep upstream's loose types; `.oxlintrc.json` therefore excludes that ported surface (and only that surface) from the type-aware rules that loose types necessarily trip. `src/bridge/**`, `src/tools.ts`, `src/index.ts`, and `tests/**` stay under the strict profile.
 - Upstream's `*.test.mjs` cases were not ported wholesale: this package covers four contracts — ref identity, iframe ownership, snapshot sanitization, and download path validation — while the remaining upstream cases (CDP call counts, snapshot compression, tombstone limits, the real download completion path, and end to end) still live upstream only.
+- `scripts/verify-concrete-terms.ts` exempts `src/runtime/**` and the two specs that assert that plane's iframe attribution field, because the blocked term names an upstream field there rather than an origin label; every other file in this package stays scanned.
 
 ### Dev Note
 

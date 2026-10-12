@@ -363,7 +363,7 @@ export async function fillInput(
 
 /**
  * Focus an element and dispatch a DOM KeyboardEvent in page JavaScript.
- * Note: dispatched event has isTrusted=false; some frameworks ignore it (see docs/issues/dispatchKey-synthetic-keyboard-event.md).
+ * Note: the dispatched event has isTrusted=false, and some frameworks ignore synthetic key events.
  * @param {string} selector CSS selector / @ref / loc= / xpath= for the target element.
  * @param {string} [key="Enter"] Event key.
  * @param {"keydown"|"keypress"|"keyup"|string} [event="keypress"] Event type.

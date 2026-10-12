@@ -64,6 +64,27 @@ describe('concrete terminology policy', () => {
     )).toEqual([{ file: '.agents/notes/implemented/process/current.md', line: 1 }])
   })
 
+  it('excludes the ported ego-browser runtime and the tests asserting its field names', () => {
+    expect(findConcreteTermViolations(
+      `packages/web/ego-browser/src/runtime/${blockedTerm}.ts`,
+      blockedTerm,
+    )).toEqual([])
+    for (const file of [
+      'packages/web/ego-browser/tests/page-ref-identity.host.spec.ts',
+      'packages/web/ego-browser/tests/snapshot-result.host.spec.ts',
+    ]) {
+      expect(findConcreteTermViolations(file, blockedTerm)).toEqual([])
+    }
+    expect(findConcreteTermViolations(
+      'packages/web/ego-browser/tests/other.host.spec.ts',
+      blockedTerm,
+    )).toEqual([{ file: 'packages/web/ego-browser/tests/other.host.spec.ts', line: 1 }])
+    expect(findConcreteTermViolations(
+      'packages/web/ego-browser/src/tools.ts',
+      blockedTerm,
+    )).toEqual([{ file: 'packages/web/ego-browser/src/tools.ts', line: 1 }])
+  })
+
   it('preserves historical identifiers only in alpha and RC release schema snapshots', () => {
     for (const channel of ['alpha', 'rc']) {
       expect(findConcreteTermViolations(
