@@ -1,9 +1,29 @@
-// @ts-nocheck — ported from ego-browser v2.0.0-beta.4 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
+import {
+  isCdpRequestTimeoutError,
+  isFrameLifecycleError,
+  isSessionLostError,
+} from '../browser-runtime.ts'
 import {
   ElementResolutionError,
   resolveElementObjectId,
 } from '../element-resolver.ts'
 import { type RefMap } from '../ref-map.ts'
+
+const SELECTOR_POLL_INTERVAL_MS = 100
+/** How often a polling wait re-enumerates iframe sessions to catch late frames. */
+const FRAME_DISCOVERY_REFRESH_INTERVAL_MS = 500
+/**
+ * An element failure worth another resolution attempt: the resolver reported a
+ * transient state, or a frame vanished mid-resolution. Session loss is not
+ * included; callers decide whether the lost session was the Page itself.
+ */
+export function isTransientElementError(error: unknown): error is Error {
+  return (
+    isFrameLifecycleError(error) ||
+    (error instanceof ElementResolutionError && error.kind === 'transient')
+  )
+}
 
 type PageWaitServices = {
   cdp(
@@ -99,7 +119,7 @@ export async function waitForSelectorInPage(
   refMap: RefMap,
   selector: string,
   options: PageWaitForSelectorOptions = {},
-  iframeSessions = new Map<string, string>(),
+  getIframeSessions: (timeoutMs: number) => Promise<Map<string, string>>,
 ): Promise<true> {
   if (typeof selector !== 'string' || selector.length === 0) {
     throw new TypeError(
@@ -110,9 +130,22 @@ export async function waitForSelectorInPage(
   const state = options.state ?? 'visible'
 
   const deadline = services.now() + timeoutMs
-  while (services.now() <= deadline) {
+  let iframeSessions: Map<string, string> | undefined
+  let refreshFrames = false
+  let nextDiscoveryAt = 0
+  while (true) {
     let resolved: { objectId: string; sessionId: string } | undefined
     try {
+      if (
+        !iframeSessions ||
+        (refreshFrames && services.now() >= nextDiscoveryAt)
+      ) {
+        iframeSessions = await getIframeSessions(
+          Math.max(1, deadline - services.now()),
+        )
+        nextDiscoveryAt = services.now() + FRAME_DISCOVERY_REFRESH_INTERVAL_MS
+        refreshFrames = false
+      }
       resolved = await resolveElementObjectId(
         cdpAdapter(services),
         sessionId,
@@ -136,13 +169,24 @@ export async function waitForSelectorInPage(
         if (state === 'visible' ? visible : !visible) return true
       }
     } catch (error) {
-      if (
-        !(error instanceof ElementResolutionError) ||
-        error.kind !== 'transient'
-      ) {
+      // Frame discovery is bounded by the remaining budget; a transport timeout
+      // at the deadline is this wait's own timeout, not a distinct failure.
+      if (isCdpRequestTimeoutError(error) && deadline - services.now() <= 0) {
+        break
+      }
+      if (!isRetryableSelectorWaitError(error, sessionId)) {
         throw error
       }
-      if (state === 'detached' || state === 'hidden') return true
+      if (error instanceof ElementResolutionError) {
+        if (state === 'detached' || state === 'hidden') return true
+        // The element may live in an iframe that appears later; re-enumerate
+        // frames at a throttled cadence while polling.
+        refreshFrames = true
+      } else {
+        // A frame or its session vanished: rediscover before the next attempt.
+        refreshFrames = true
+        nextDiscoveryAt = 0
+      }
     } finally {
       if (resolved?.objectId) {
         await services
@@ -156,10 +200,28 @@ export async function waitForSelectorInPage(
     }
     const remaining = deadline - services.now()
     if (remaining <= 0) break
-    await services.sleep(Math.min(100, remaining))
+    await services.sleep(Math.min(SELECTOR_POLL_INTERVAL_MS, remaining))
   }
   throw new Error(
     `page.waitForSelector timed out after ${timeoutMs}ms: ${selector}`,
+  )
+}
+
+function isRetryableSelectorWaitError(
+  error: unknown,
+  pageSessionId: string,
+): boolean {
+  if (
+    isTransientElementError(error) ||
+    isTransientNavigationContextError(error)
+  )
+    return true
+  // A lost iframe session is recovered by rediscovery. A lost Page session is
+  // terminal: never report a closed page as "hidden" or keep polling it.
+  return (
+    isSessionLostError(error) &&
+    typeof error.sessionId === 'string' &&
+    error.sessionId !== pageSessionId
   )
 }
 
@@ -242,7 +304,17 @@ function compilePageURLMatcher(expected: PageURLMatcher): {
         } catch {
           return false
         }
-        const result = expected(parsed)
+        let result: unknown
+        try {
+          result = expected(parsed)
+        } catch (error) {
+          // Agents often treat the argument as a string (`url.includes(...)`).
+          if (!(error instanceof TypeError)) throw error
+          throw new TypeError(
+            `page.waitForURL predicate threw: ${error.message}. The predicate receives a URL object; use url.href, url.pathname, or url.searchParams.`,
+            { cause: error },
+          )
+        }
         if (typeof result !== 'boolean') {
           throw new TypeError(
             'page.waitForURL predicate must return a boolean synchronously',
@@ -848,14 +920,8 @@ async function waitForNetworkIdle(
 }
 
 function isRetryableNetworkRefreshError(error: unknown): boolean {
-  if (
-    Boolean(error) &&
-    typeof error === 'object' &&
-    (error as { code?: unknown }).code === 'EGO_CDP_REQUEST_TIMEOUT'
-  ) {
-    return true
-  }
-  return /CDP request timed out:|detached Page session|Session (?:with given id )?not found|Target closed|No session/i.test(
+  if (isCdpRequestTimeoutError(error) || isSessionLostError(error)) return true
+  return /CDP request timed out:|detached Page session/i.test(
     error instanceof Error ? error.message : String(error),
   )
 }

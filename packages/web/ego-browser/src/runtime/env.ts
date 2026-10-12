@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.0.0-beta.4 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 import { existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { loadEnvFile as loadNodeEnvFile } from 'node:process'
@@ -12,7 +12,7 @@ export function agentWorkspace() {
     return resolvePath(process.env.EGO_BROWSER_AGENT_WORKSPACE)
   }
 
-  const bundledSkill = resolve(SRC_DIR, 'ego-browser')
+  const bundledSkill = resolve(SRC_DIR, 'agent-skills', 'ego-browser')
   if (existsSync(bundledSkill)) {
     return bundledSkill
   }

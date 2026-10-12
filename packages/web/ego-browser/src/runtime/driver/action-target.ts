@@ -1,10 +1,9 @@
+// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 /**
  * Browser-side helpers shared by selector actions that need composed-tree
  * relationships. Keep action policy at each call site: pointer actions and
  * editing actions intentionally do not retarget in the same way.
  */
-// @ts-nocheck — ported from ego-browser v2.0.0-beta.4 (strict:false); vendor exemption, not strict-checked.
-
 export const COMPOSED_PARENT_HELPER = `
   function composedParent(element) {
     if (element?.assignedSlot) return element.assignedSlot;

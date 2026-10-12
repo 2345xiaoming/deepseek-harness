@@ -6,7 +6,7 @@
 
 - **自包含 CDP-over-WebSocket 桥**：复刻 ego-browser harness v2 期望的 `globalThis.ego` 接口——传输面（`sendCDPMessage`/`onCDPMessage`/`onSendCDPMessageError`/`listTabs`/`createTab`/`snapshot`）+ 任务空间面（`listTaskSpaces`/`createTaskSpace`/`useTaskSpace`/`claimTaskSpace`/`completeTaskSpace`/`closeTaskSpace`/`handOffTaskSpace`/`takeOverTaskSpace`/`animationHighlightMouseToPosition`/`setAgentTaskState`，以单一合成 agent-owned 空间承载本机 Chrome）。没有闭源运行时；运行时依赖仅 `acorn`（v2 的 run/help 解析用），`WebSocket` 由 Node 22 自带。
 - **懒启动**：插件加载（`apply`）只注册工具；首个真实浏览器调用才 spawn Chrome。没跑浏览器工具的会话零进程开销。
-- **复用整套 harness**：CDP 会话管理（15s 超时、SESSION_LOST 自动重连、10k 事件缓冲、dialog 跟踪、OOPIF 自动 attach、网络跟踪）、Page/TaskSpace 对象模型与 native-operation gate 串行化、元素解析（`@N` ref / `loc=css:` / `loc=role:` / `xpath=`）、ref 刷新与稳定 locator、页面台账（page ledger）、学习子系统（site skills）全部来自 ego-browser v2 源码，经移植保留。
+- **复用整套 harness**：CDP 会话管理（15s 超时、SESSION_LOST 自动重连、10k 事件缓冲、dialog 跟踪与 dialog 打开期间的快速失败、OOPIF 自动 attach、网络跟踪）、Page/TaskSpace 对象模型与 native-operation gate 串行化、元素解析（`@N` ref / `loc=css:` / `loc=role:` / `xpath=`）、ref 跨快照/动作/轮次保持身份（`documentId` 失效检测）、iframe 快照保留与 frame-aware 子树快照、下载拦截（Playwright 风格 `Download.*`）、页面台账（page ledger）、学习子系统（site skills）全部来自 ego-browser v2 源码，经移植保留。
 
 ## 工具
 
@@ -75,4 +75,22 @@ node packages/web/ego-browser/tests/smoke.mjs
 
 ## 移植说明
 
-`src/runtime/` 是从 [citrolabs/ego-lite](https://github.com/citrolabs/ego-lite) tag `v2.0.0-beta.4`（`package/ego-browser/src`）移植的 harness 源码：import 后缀 `.js`→`.ts` 适配 DSH 的 `moduleResolution: bundler`，并以 `// @ts-nocheck` 豁免其原 `strict:false` 下的隐式 any（vendor 移植豁免；本包自写代码保持严格检查）。v2 移植删除了旧线独有的 `video-recorder.ts`/`driver/screencast.ts`/`driver/locator.ts`/`driver/downloads.ts`/`locator-query.ts`（其职责并入 `element-resolver.ts`/`page-model.ts` 新架构），新增 `page-model.ts`/`page-ledger.ts`/`page-discovery.ts`/`native-gate.ts`/`public-api-schema.ts`/`snapshot-result.ts`/`clipboard.ts`/`skill-migration.ts` 等。移植版 `helpers.ts` 的 task-space 入口函数需显式返回类型标注（声明合成对匿名类私有成员不可命名）。桥实现见 `src/bridge/`（`chrome.ts` 生命周期、`ws-cdp.ts` CDP 传输 + 任务空间 shim、`snapshot.ts` AX 快照）。
+`src/runtime/` 是从 [citrolabs/ego-lite](https://github.com/citrolabs/ego-lite) tag `v2.1.0-beta.2`（`package/ego-browser/src`）移植的 harness 源码，与上游保持 1:1 文件对应（仅不含上游的包入口 `index.ts`，由本包的 `src/index.ts` 取代）。import 后缀 `.js`→`.ts` 适配 DSH 的 `moduleResolution: bundler`，并以 `// @ts-nocheck` 豁免其原 `strict:false` 下的隐式 any（vendor 移植豁免；本包自写代码保持严格检查）。移植面包括 `page-model.ts`/`page-ledger.ts`/`page-discovery.ts`/`native-gate.ts`/`public-api-schema.ts`/`snapshot-result.ts`/`clipboard.ts`/`skill-migration.ts`/`driver/downloads.ts` 等。桥实现见 `src/bridge/`（`chrome.ts` 生命周期、`ws-cdp.ts` CDP 传输 + 任务空间 shim、`snapshot.ts` AX 快照）。
+
+重移植时需重新施加的本地改动（上游未收录，均为 DSH 侧必需）：
+
+- `driver/nav.ts`：`gotoAndWait` 在 `Page.navigate` 返回 `errorText` 或 `isDownload` 时抛错，避免把失败导航报成成功。
+- `helpers.ts`：`taskSpace`/`useOrCreateTaskSpace`/`claimTaskSpace`/`takeOverTaskSpace` 补显式返回类型标注（声明合成无法命名匿名类的私有成员）。
+- `page-ledger.ts`：动态删除改用 `Reflect.deleteProperty`（`typescript/no-dynamic-delete` 为 error 且不可自动修复）。
+- `skill-migration.ts`：恢复指令保留 DSH 措辞——上游文本指向其自有 CLI `ego-browser skill`，本包不提供该命令。
+- `learning/index.ts`：保留 `returns` 字段；示例文本随上游（`runSiteTool`/`runSiteBrowserTool` 才是本包实际暴露的扁平 helper）。
+- `page-context-guard.ts`：字符类写作 `[a-z_$]`（该正则带 `/i`，与上游 `[A-Za-z_$]` 等价）。
+- 移植面 lint 适配：`clipboard.ts` 的 catch 参数写作 `_error`；`element-resolver.ts` 中未使用的上游函数保留 `no-unused-vars` 豁免；`page-model.ts` 中闭包先读、随后赋值的 `timer` 保留 `prefer-const` 豁免。
+- `../index.ts`（本包入口）：把 `help()` 文本绑到 `browser_run` 的本次输出，并在 dispose 时回收下载产物。
+
+风格统一只跑 `@stylistic/*` 规则，不要对移植面跑全量 `oxlint --fix`：`typescript/no-useless-default-assignment` 等规则会改写 `js()` 这类为严格调用方保留的可选形参。
+
+## Known Limitations and Deferred Work
+
+- `src/runtime/` 整片以 `// @ts-nocheck` 豁免仓库 strict 剖面，CDP 载荷仍是上游的松散类型；`.oxlintrc.json` 的 ego-browser 覆盖只关掉 `ban-ts-comment`/`no-explicit-any`/`no-non-null-assertion`，该移植面因此仍带着类型感知 lint 告警。
+- 上游每个源文件都配有 `*.test.mjs`，本包只移植了桥接与工具级用例；上游针对 ref 身份与 iframe 的回归用例未随移植带入。

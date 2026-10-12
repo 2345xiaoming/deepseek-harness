@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 import { pathToFileURL } from 'node:url'
 import { readFile } from 'node:fs/promises'
 import { isAbsolute, relative, resolve } from 'node:path'
@@ -83,7 +83,7 @@ export async function loadLearnedContext(
         description: schema.description || '',
         args: schema.args || {},
         returns: schema.returns || null,
-        example: `await site.runTool("${siteId}", "${toolName}", { ... })`,
+        example: `await runSiteTool("${siteId}", "${toolName}", { ... })`,
       })
     }
 
@@ -96,7 +96,7 @@ export async function loadLearnedContext(
         description: schema.description || '',
         args: schema.args || {},
         returns: schema.returns || null,
-        example: `await site.runBrowserTool("${siteId}", "${toolName}", { ... })`,
+        example: `await runSiteBrowserTool("${siteId}", "${toolName}", { ... })`,
       })
     }
   }

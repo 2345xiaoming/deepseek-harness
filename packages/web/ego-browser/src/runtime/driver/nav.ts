@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.0.0-beta.4 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 import {
   browserEgo,
   clearPreferredTarget,
@@ -50,6 +50,12 @@ type OpenOrReuseTabOptions = {
 
 type TabTarget = string | { targetId: string }
 
+/** `Page.navigate` payload fields this driver acts on (see driver/page-waits.ts). */
+type NavigationResult = {
+  errorText?: string
+  isDownload?: boolean
+}
+
 /**
  * Navigate the current tab to a URL using CDP Page.navigate.
  * @param {string} url Absolute or browser-supported URL to load.
@@ -57,12 +63,6 @@ type TabTarget = string | { targetId: string }
  */
 export async function gotoUrl(url) {
   return cdp('Page.navigate', { url })
-}
-
-/** `Page.navigate` payload fields this driver acts on (see driver/page-waits.ts). */
-type NavigationResult = {
-  errorText?: string
-  isDownload?: boolean
 }
 
 /**

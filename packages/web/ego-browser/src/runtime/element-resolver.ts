@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.0.0-beta.4 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 import { parseRef } from './ref-map.ts'
 import {
   ACTION_TARGET_STATE_HELPERS,
@@ -59,6 +59,7 @@ export async function resolveElementCenter(
     if (!entry) {
       throw new ElementResolutionError(`Unknown ref: ${refId}`, 'transient')
     }
+    assertRefProvenance(refMap, entry, refId)
     const effectiveSessionId = resolveFrameSession(
       entry.frameId,
       sessionId,
@@ -77,6 +78,7 @@ export async function resolveElementCenter(
           sessionId: effectiveSessionId,
         }
       } catch (error) {
+        if (refMap.allowFallback === false) throw exactRefError(error, refId)
         if (error instanceof ElementResolutionError) {
           // The node resolved but has no usable box model (not rendered yet).
           // Propagate the retryable state instead of falling back to role/name,
@@ -86,6 +88,7 @@ export async function resolveElementCenter(
         // The backend node can become stale after DOM updates; fall back to role/name lookup below.
       }
     }
+    if (refMap.allowFallback === false) throw staleRefError(refId)
     const backendNodeId = await findBackendNodeIdByRoleName(
       cdp,
       sessionId,
@@ -152,6 +155,16 @@ export async function resolveElementObjectId(
     if (!entry) {
       throw new ElementResolutionError(`Unknown ref: ${refId}`, 'transient')
     }
+    assertRefProvenance(refMap, entry, refId)
+    if (entry.frameProvenance === 'unknown') {
+      return resolveRefObjectIdWithRecoveredFrame(
+        cdp,
+        sessionId,
+        iframeSessions,
+        refId,
+        entry,
+      )
+    }
     const effectiveSessionId = resolveFrameSession(
       entry.frameId,
       sessionId,
@@ -176,10 +189,12 @@ export async function resolveElementObjectId(
             ...(entry.frameId ? { frameId: entry.frameId } : {}),
           }
         }
-      } catch {
+      } catch (error) {
+        if (refMap.allowFallback === false) throw exactRefError(error, refId)
         // The backend node can become stale after DOM updates; fall back to role/name lookup below.
       }
     }
+    if (refMap.allowFallback === false) throw staleRefError(refId)
     const backendNodeId = await findBackendNodeIdByRoleName(
       cdp,
       sessionId,
@@ -253,6 +268,158 @@ export async function resolveElementObjectId(
     `Element not found: ${selectorOrRef}`,
     'transient',
   )
+}
+
+function staleRefError(refId: string): ElementResolutionError {
+  return new ElementResolutionError(
+    `Stale ref: @${refId}; take a new snapshot`,
+    'permanent',
+  )
+}
+
+function exactRefError(error: unknown, refId: string): unknown {
+  return /(?:no node|could not find node|cannot find node) with given/i.test(
+    String(error),
+  )
+    ? staleRefError(refId)
+    : error
+}
+
+function assertRefProvenance(refMap, entry, refId: string): void {
+  if (refMap.allowFallback === false && entry.frameProvenance === 'unknown') {
+    throw new ElementResolutionError(
+      `Ref @${refId} has unknown frame provenance; take a new snapshot or use a locator`,
+      'permanent',
+    )
+  }
+}
+
+async function resolveRefObjectIdWithRecoveredFrame(
+  cdp,
+  sessionId: string,
+  iframeSessions,
+  refId: string,
+  entry,
+): Promise<{ objectId: string; sessionId: string; frameId?: string }> {
+  const allContexts = pageContexts(sessionId, iframeSessions)
+  const frameContexts = allContexts.slice(1)
+  // Unknown provenance means the snapshot placed this ref under an iframe, so
+  // frames are searched first. The main document remains a fallback in case
+  // the snapshot text misattributed a page-owned node to a frame.
+  let matches = await collectBackendNodeMatches(
+    cdp,
+    frameContexts,
+    entry.backendNodeId,
+  )
+  if (matches.size === 0) {
+    matches = await collectBackendNodeMatches(
+      cdp,
+      allContexts.slice(0, 1),
+      entry.backendNodeId,
+    )
+  }
+
+  let match
+  if (matches.size === 1) {
+    match = [...matches.values()][0]
+  } else if (matches.size > 1) {
+    const semanticMatches = [...matches.values()].filter(
+      candidate =>
+        candidate.role === normalizeRole(entry.role) &&
+        candidate.name === entry.name,
+    )
+    if (semanticMatches.length === 1) {
+      match = semanticMatches[0]
+    } else {
+      throw new ElementResolutionError(
+        `Ref @${refId} matched ${matches.size} frame contexts because its frame provenance is missing`,
+        'permanent',
+      )
+    }
+  } else {
+    // strictGlobal resolves before findUniqueRoleMatch consults actionability,
+    // so passing it here would only imply a filter that never runs. Ambiguity
+    // across the whole page is the answer this recovery path wants anyway.
+    match = await findUniqueRoleMatch(
+      cdp,
+      allContexts,
+      entry.role,
+      entry.name,
+      `ref @${refId}`,
+      { strictGlobal: true },
+    )
+  }
+
+  const result = await send(
+    cdp,
+    'DOM.resolveNode',
+    {
+      backendNodeId: match.backendNodeId,
+      objectGroup: 'ego-browser',
+    },
+    match.sessionId,
+  )
+  const objectId = result.object?.objectId
+  if (!objectId) {
+    throw new ElementResolutionError(
+      `No objectId for ref @${refId}`,
+      'permanent',
+    )
+  }
+  const frameId = match.frameId || match.ownerFrameId
+  return {
+    objectId,
+    sessionId: match.sessionId,
+    ...(frameId ? { frameId } : {}),
+  }
+}
+
+type BackendNodeMatch = {
+  backendNodeId: number
+  sessionId: string
+  frameId?: string
+  role: string
+  name: string
+}
+
+async function collectBackendNodeMatches(
+  cdp,
+  contexts: PageRuntimeContext[],
+  backendNodeId: number,
+): Promise<Map<string, BackendNodeMatch>> {
+  const matches = new Map<string, BackendNodeMatch>()
+  if (contexts.length === 0) return matches
+  const trees = await Promise.allSettled(
+    contexts.map(async context => ({
+      context,
+      result: await send(
+        cdp,
+        'Accessibility.getFullAXTree',
+        context.frameId ? { frameId: context.frameId } : {},
+        context.sessionId,
+      ),
+    })),
+  )
+  for (const tree of trees) {
+    if (tree.status !== 'fulfilled') continue
+    const { context, result } = tree.value
+    for (const node of result.nodes || []) {
+      if (node.ignored || node.backendDOMNodeId !== backendNodeId) continue
+      const frameId = context.ownerFrameId || context.frameId
+      const key = `${context.sessionId}\u0000${node.backendDOMNodeId}`
+      const existing = matches.get(key)
+      if (!existing || (!existing.frameId && frameId)) {
+        matches.set(key, {
+          backendNodeId: node.backendDOMNodeId,
+          sessionId: context.sessionId,
+          role: normalizeRole(extractAxString(node.role)),
+          name: extractAxString(node.name),
+          ...(frameId ? { frameId } : {}),
+        })
+      }
+    }
+  }
+  return matches
 }
 
 /**
@@ -1237,22 +1404,36 @@ async function roleMatchActionability(
       {
         functionDeclaration: `function() {
           ${actionabilityRequiresPointer(actionability) ? HIT_TARGET_HELPERS : ACTION_TARGET_STATE_HELPERS}
-          if (!this.isConnected) return { actionable: false };
-          const rect = this.getBoundingClientRect();
+          if (!this.isConnected) {
+            return { actionable: false, blocker: "element is detached from the DOM" };
+          }
+          if (this.closest?.("[hidden], [inert]")) {
+            return { actionable: false, blocker: "element is hidden or inert" };
+          }
           const view = this.ownerDocument?.defaultView;
-          if (!view || rect.width <= 0 || rect.height <= 0) return { actionable: false };
+          if (!view) {
+            return { actionable: false, blocker: "element has no browsing context" };
+          }
+          const rect = this.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) {
+            return { actionable: false, blocker: "element has a zero-sized bounding box" };
+          }
           const style = view.getComputedStyle(this);
-          const visible = !this.closest?.("[hidden], [inert]") &&
-            style.display !== "none" &&
-            style.visibility !== "hidden";
-          if (!visible) return { actionable: false };
+          if (style.display === "none") {
+            return { actionable: false, blocker: "element has display: none" };
+          }
+          if (style.visibility === "hidden") {
+            return { actionable: false, blocker: "element has visibility: hidden" };
+          }
           if (
             ${JSON.stringify(actionabilityRequiresEnabled(actionability))} &&
             isActionTargetDisabled(this)
           ) return { actionable: false, blocker: "element is disabled" };
           if (${JSON.stringify(actionabilityRequiresPointer(actionability))}) {
             const point = actionPointForElement(this);
-            if (!point) return { actionable: false };
+            if (!point) {
+              return { actionable: false, blocker: "element has no actionable point" };
+            }
             if (!scrollRequestForPoint(this, point)) {
               const interceptor = interceptingElementAtPoint(this, point);
               if (interceptor) {
@@ -1434,39 +1615,40 @@ async function findBackendNodeIdByRoleName(
     params,
     effectiveSessionId,
   )
-  const nthIndex = nth ?? 0
-  let matchCount = 0
-  for (const node of result.nodes || []) {
-    if (node.ignored) {
-      continue
-    }
-    if (
-      normalizeRole(extractAxString(node.role)) !== normalizeRole(role) ||
-      extractAxString(node.name) !== name
-    ) {
-      continue
-    }
-    if (matchCount === nthIndex) {
-      if (
-        node.backendDOMNodeId === undefined ||
-        node.backendDOMNodeId === null
-      ) {
-        throw new ElementResolutionError(
-          `AX node has no backendDOMNodeId for role=${role} name=${name}`,
-          'permanent',
-        )
-      }
-      return node.backendDOMNodeId
-    }
-    matchCount += 1
-  }
-  throw new ElementResolutionError(
-    `Could not locate element with role=${role} name=${name}`,
-    'transient',
+  const matches = (result.nodes || []).filter(
+    node =>
+      !node.ignored &&
+      normalizeRole(extractAxString(node.role)) === normalizeRole(role) &&
+      extractAxString(node.name) === name,
   )
+  // This is a recovery path: the ref's backend node is gone, so role and name
+  // are the only identity left. They do not distinguish repeated labels, so an
+  // ambiguous result must fail loudly instead of silently acting on whichever
+  // node happens to come first. A ref that recorded an explicit nth already
+  // carries the disambiguator and keeps indexing.
+  if (nth === undefined && matches.length > 1) {
+    throw new ElementResolutionError(
+      `Stale ref for role=${role} name=${name} matched ${matches.length} elements after its node was replaced; take a new snapshot`,
+      'permanent',
+    )
+  }
+  const node = matches[nth ?? 0]
+  if (!node) {
+    throw new ElementResolutionError(
+      `Could not locate element with role=${role} name=${name}`,
+      'transient',
+    )
+  }
+  if (node.backendDOMNodeId === undefined || node.backendDOMNodeId === null) {
+    throw new ElementResolutionError(
+      `AX node has no backendDOMNodeId for role=${role} name=${name}`,
+      'permanent',
+    )
+  }
+  return node.backendDOMNodeId
 }
 
-// oxlint-disable-next-line no-unused-vars -- retained for upstream parity; candidates land here when ref-lookup needs a second path
+// oxlint-disable-next-line no-unused-vars -- kept for 1:1 upstream parity in the ported plane.
 async function findUniqueBackendNodeIdByRoleName(cdp, sessionId, role, name) {
   const result = await send(cdp, 'Accessibility.getFullAXTree', {}, sessionId)
   const matches = []
@@ -1623,19 +1805,24 @@ async function firstActionabilityBlocker(
         `(() => {
           ${actionabilityRequiresPointer(actionability) ? HIT_TARGET_HELPERS : ACTION_TARGET_STATE_HELPERS}
           for (const element of Array.from(${elementsExpression} || [])) {
-            if (!element?.isConnected || element.closest?.("[hidden], [inert]")) continue;
+            if (!element?.isConnected) return "element is detached from the DOM";
+            if (element.closest?.("[hidden], [inert]")) return "element is hidden or inert";
             const view = element.ownerDocument?.defaultView;
+            if (!view) return "element has no browsing context";
             const rect = element.getBoundingClientRect();
-            const style = view?.getComputedStyle(element);
-            if (!view || rect.width <= 0 || rect.height <= 0 ||
-                style.display === "none" || style.visibility === "hidden") continue;
+            if (rect.width <= 0 || rect.height <= 0) {
+              return "element has a zero-sized bounding box";
+            }
+            const style = view.getComputedStyle(element);
+            if (style.display === "none") return "element has display: none";
+            if (style.visibility === "hidden") return "element has visibility: hidden";
             if (
               ${JSON.stringify(actionabilityRequiresEnabled(actionability))} &&
               isActionTargetDisabled(element)
             ) return "element is disabled";
             if (!${JSON.stringify(actionabilityRequiresPointer(actionability))}) continue;
             const point = actionPointForElement(element);
-            if (!point) continue;
+            if (!point) return "element has no actionable point";
             if (scrollRequestForPoint(element, point)) continue;
             const interceptor = interceptingElementAtPoint(element, point);
             if (interceptor) {

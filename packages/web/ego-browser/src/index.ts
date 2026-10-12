@@ -16,6 +16,7 @@ import { egoSnapshot } from './bridge/snapshot.ts'
 import { applyEgoBrowserTools } from './tools.ts'
 import { helperContext } from './runtime/helpers.ts'
 import { formatCliLogValue } from './runtime/format.ts'
+import { disposeDownloadArtifacts } from './runtime/driver/downloads.ts'
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
   ...args: string[]
@@ -46,7 +47,12 @@ export function apply(ctx: Context, config: Config): void {
         ),
       disposeChrome,
     })
-    return () => restoreEgo()
+    return () => {
+      // Round-local download files live outside the browser profile, so the bridge
+      // teardown cannot reclaim them.
+      disposeDownloadArtifacts()
+      restoreEgo()
+    }
   }, 'ego-browser: install bridge')
 
   applyEgoBrowserTools(ctx)
@@ -93,7 +99,16 @@ function applyBrowserRunTool(ctx: Context): void {
               chunks.push('[warn] ' + vals.map(formatCliLogValue).join(' ') + '\n')
             },
           }
-          const context = helperContext()
+          // The ported sink only flushes through the CLI lifecycle, which the tool
+          // path never runs, so bind help()'s text to this call's captured output.
+          const context = helperContext(
+            {},
+            {
+              printHelp: (text) => {
+                chunks.push(`${text}\n`)
+              },
+            },
+          )
           const names = [...Object.keys(context), 'console']
           const values = [...Object.values(context), capturedConsole]
           const fn = new AsyncFunction(...names, `"use strict";\n${args.js}`)

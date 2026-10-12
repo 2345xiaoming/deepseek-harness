@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.0.0-beta.4 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 import { state } from './state.ts'
 import {
   buildEgoError,
@@ -13,6 +13,8 @@ const SESSION_TTL_MS = 2000
 const MAX_BUFFERED_EVENTS = 10000
 const SESSION_LOST =
   /Session (?:with given id )?not found|Target closed|No session/i
+const FRAME_LIFECYCLE_LOST =
+  /Frame with the given frameId is not found|No frame with given id found|No target with given id/i
 const BROWSER_LEVEL = method =>
   method.startsWith('Target.') || method.startsWith('Browser.')
 const OOPIF_AUTO_ATTACH_PARAMS = {
@@ -27,15 +29,20 @@ const OOPIF_AUTO_ATTACH_PARAMS = {
     { exclude: true },
   ],
 }
-const DIALOG_BLOCKED_METHOD = method =>
-  method.startsWith('Input.') ||
-  method.startsWith('Runtime.') ||
-  method === 'DOM.setFileInputFiles' ||
-  method === 'Page.navigate'
+// A modal JavaScript dialog stalls every command the renderer has to answer,
+// including Page.getFrameTree, Page.captureScreenshot, DOM.*, Accessibility.*,
+// and even Page.enable. Only methods the browser process answers on its own
+// keep working, so allow those and fail every other command fast instead of
+// letting it run into the transport timeout.
+const DIALOG_SAFE_METHOD = method =>
+  BROWSER_LEVEL(method) ||
+  method === 'Page.handleJavaScriptDialog' ||
+  method === 'Page.setDownloadBehavior'
 let nextMessageId = 1
 const pending = new Map()
 const browserEvents = []
 const browserEventSubscribers = new Set<(event: any) => void>()
+const pageEventSubscribers = new Map<string, Set<(event: any) => void>>()
 const targetStates = new Map()
 const sessionTargets = new Map()
 const childTargets = new Map<string, Set<string>>()
@@ -76,6 +83,31 @@ export function isCdpRequestTimeoutError(
   )
 }
 
+/** A CDP command error carrying the session it was addressed to. */
+export type CdpCommandError = Error & { sessionId?: string }
+
+/** The CDP session that issued a failed command is gone. */
+export function isSessionLostError(error: unknown): error is CdpCommandError {
+  return error instanceof Error && SESSION_LOST.test(error.message)
+}
+
+/** A frame or iframe target vanished between enumeration and use. */
+export function isFrameLifecycleError(
+  error: unknown,
+): error is CdpCommandError {
+  return error instanceof Error && FRAME_LIFECYCLE_LOST.test(error.message)
+}
+
+/**
+ * A frame or its session disappeared mid-operation. Callers that have not yet
+ * dispatched input may rediscover frame sessions and retry.
+ */
+export function isRetryableFrameLifecycleError(
+  error: unknown,
+): error is CdpCommandError {
+  return isSessionLostError(error) || isFrameLifecycleError(error)
+}
+
 /**
  * Signals that a modal JavaScript dialog prevented a CDP command from
  * completing. The dialog remains open; Page-level code decides whether to
@@ -91,9 +123,21 @@ export class PageDialogOpenedError extends Error {
     method: string,
     sessionId: string,
     dialog: Record<string, unknown>,
+    { alreadyOpen = false }: { alreadyOpen?: boolean } = {},
   ) {
+    const kind =
+      typeof dialog.type === 'string' && dialog.type
+        ? `JavaScript ${dialog.type} dialog`
+        : 'JavaScript dialog'
+    const text =
+      typeof dialog.message === 'string' && dialog.message
+        ? ` (${JSON.stringify(dialog.message)})`
+        : ''
+    const situation = alreadyOpen
+      ? `${method} cannot run while a ${kind}${text} is open`
+      : `a ${kind}${text} opened while ${method} was running`
     super(
-      `a JavaScript dialog opened while ${method} was running; handle the dialog before continuing`,
+      `${situation}; handle it with page.acceptDialog() or page.dismissDialog() before continuing`,
     )
     this.name = 'PageDialogOpenedError'
     this.method = method
@@ -369,6 +413,7 @@ export function disposeBrowserRuntime(
   releaseRuntimeCallbacks(runtime)
   rejectAllPending(new Error('ego-browser runtime was disposed'))
   browserEventSubscribers.clear()
+  pageEventSubscribers.clear()
   invalidateSession()
 }
 
@@ -381,6 +426,29 @@ export function subscribeBrowserEvents(
   }
   browserEventSubscribers.add(listener)
   return () => browserEventSubscribers.delete(listener)
+}
+
+/** Subscribe to session events for one browser target. */
+export function subscribePageEvents(
+  targetId: string,
+  listener: (event: any) => void,
+): () => void {
+  if (typeof targetId !== 'string' || targetId.length === 0) {
+    throw new TypeError('page event subscription requires a targetId')
+  }
+  if (typeof listener !== 'function') {
+    throw new TypeError('page event listener must be a function')
+  }
+  let listeners = pageEventSubscribers.get(targetId)
+  if (!listeners) {
+    listeners = new Set()
+    pageEventSubscribers.set(targetId, listeners)
+  }
+  listeners.add(listener)
+  return () => {
+    listeners?.delete(listener)
+    if (listeners?.size === 0) pageEventSubscribers.delete(targetId)
+  }
 }
 
 function rawCdp(
@@ -401,7 +469,19 @@ function rawCdp(
   return new Promise<any>((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id)
-      reject(new CdpRequestTimeoutError(method, timeoutMs, sessionId))
+      // Commands sent outside browserCdp() skip its dialog check. Name the
+      // dialog if one is what stalled this command.
+      const dialog =
+        sessionId && !DIALOG_SAFE_METHOD(method)
+          ? pendingDialog(sessionId)
+          : null
+      reject(
+        dialog
+          ? new PageDialogOpenedError(method, sessionId, dialog, {
+            alreadyOpen: true,
+          })
+          : new CdpRequestTimeoutError(method, timeoutMs, sessionId),
+      )
     }, timeoutMs)
     pending.set(id, {
       method,
@@ -442,9 +522,12 @@ export async function browserCdp(
   if (!explicit && !BROWSER_LEVEL(method)) {
     effective = await ensureSession()
   }
-  const dialog = effective ? pendingDialog(effective) : null
-  if (dialog && DIALOG_BLOCKED_METHOD(method)) {
-    throw new PageDialogOpenedError(method, effective, dialog)
+  const dialog =
+    effective && !DIALOG_SAFE_METHOD(method) ? pendingDialog(effective) : null
+  if (dialog) {
+    throw new PageDialogOpenedError(method, effective, dialog, {
+      alreadyOpen: true,
+    })
   }
   try {
     const response = await rawCdp(method, params, effective, timeoutMs)
@@ -707,8 +790,23 @@ export async function ensureFrameSessions(
   const sessionByTarget = new Map<string, string>([
     [pageTargetId, pageSessionId],
   ])
+  const vanishedTargetIds = new Set<string>()
   for (const info of descendants) {
-    const sessionId = await ensureSession(info.targetId, remaining())
+    let sessionId: string
+    try {
+      sessionId = await ensureSession(info.targetId, remaining())
+    } catch (error) {
+      // Target.getTargets is a snapshot: an OOPIF can be destroyed between
+      // enumeration and attach. Such a frame is no longer part of the page, so
+      // drop it rather than fail (or restart) the whole discovery. Errors on
+      // the Page target itself are raised by ensureSession above and are not
+      // retried here.
+      if (!isRetryableFrameLifecycleError(error)) throw error
+      vanishedTargetIds.add(info.targetId)
+      liveTargetIds.delete(info.targetId)
+      clearTargetSessionTree(info.targetId, { remove: true })
+      continue
+    }
     registerTargetParent(info.targetId, nearestTargetParent(info))
     sessionByTarget.set(info.targetId, sessionId)
   }
@@ -722,7 +820,7 @@ export async function ensureFrameSessions(
     isRoot = false,
   ) => {
     const frameId = tree?.frame?.id
-    if (typeof frameId !== 'string') return
+    if (typeof frameId !== 'string' || vanishedTargetIds.has(frameId)) return
     const sessionId = sessionByTarget.get(frameId) || inheritedSessionId
     if (!isRoot) sessions.set(frameId, sessionId)
     for (const child of tree?.childFrames || []) {
@@ -731,6 +829,7 @@ export async function ensureFrameSessions(
   }
   if (frameTree) collectFrameSessions(frameTree, pageSessionId, true)
   for (const info of descendants) {
+    if (vanishedTargetIds.has(info.targetId)) continue
     if (!sessions.has(info.targetId)) {
       sessions.set(info.targetId, sessionByTarget.get(info.targetId)!)
     }
@@ -781,11 +880,19 @@ export function drainPageEvents(sessionId) {
   return target ? target.events.splice(0, target.events.length) : []
 }
 
+/**
+ * Return the JavaScript dialog blocking the Page that owns this session. An
+ * OOPIF session reports its top-level Page's dialog: Chromium delivers every
+ * dialog event on the Page session, and a dialog opened by any frame stalls
+ * that frame's renderer.
+ */
 export function pendingDialog(sessionId) {
   const targetId = sessionId
     ? sessionTargets.get(sessionId)
     : state.preferredTargetId || defaultTargetId
-  const dialog = targetId ? targetStates.get(targetId)?.pendingDialog : null
+  const dialog = targetId
+    ? targetStates.get(pageRootTargetId(targetId))?.pendingDialog
+    : null
   return dialog ? { ...dialog } : null
 }
 
@@ -1320,7 +1427,11 @@ function handleMessage(message) {
     }
     pending.delete(data.id)
     if (data.error) {
-      entry.reject(new Error(data.error.message || data.error))
+      const error: CdpCommandError = new Error(
+        data.error.message || data.error,
+      )
+      if (entry.sessionId) error.sessionId = entry.sessionId
+      entry.reject(error)
       return
     }
     if (userControlProbeState === 'stopped') {
@@ -1385,14 +1496,23 @@ function handleMessage(message) {
   }
   if (data.method === 'Page.javascriptDialogOpening') {
     if (target) {
-      target.pendingDialog = data.params || {}
-      rejectCommandsBlockedByDialog(
-        sessionId,
-        target.pendingDialog as Record<string, unknown>,
-      )
+      // A Page event proves the domain is enabled even if the Page.enable
+      // response is stalled behind this dialog and rejected below.
+      target.pageEventsEnabled = true
+      const root = targetStates.get(pageRootTargetId(targetId))
+      if (root) {
+        root.pendingDialog = data.params || {}
+        rejectCommandsBlockedByDialog(
+          targetId,
+          root.pendingDialog as Record<string, unknown>,
+        )
+      }
     }
   } else if (data.method === 'Page.javascriptDialogClosed') {
-    if (target) target.pendingDialog = null
+    const root = targetId
+      ? targetStates.get(pageRootTargetId(targetId))
+      : undefined
+    if (root) root.pendingDialog = null
   } else if (data.method === 'Page.fileChooserOpened') {
     target?.fileChooserInterception?.resolve(data.params || {})
   }
@@ -1401,22 +1521,35 @@ function handleMessage(message) {
       guardNativeCallback('browser event subscriber', () => listener(data))
     }
   }
+  if (targetId && typeof data.method === 'string') {
+    for (const listener of [...(pageEventSubscribers.get(targetId) || [])]) {
+      guardNativeCallback('page event subscriber', () => listener(data))
+    }
+  }
   const events = target ? target.events : browserEvents
   events.push(data)
   capEvents(events)
 }
 
 function rejectCommandsBlockedByDialog(
-  sessionId: string | undefined,
+  targetId: string,
   dialog: Record<string, unknown>,
 ) {
-  if (!sessionId) return
+  // The dialog stalls whichever renderer opened it, and CDP does not say which
+  // frame session that is. Treat the whole Page tree as blocked.
+  const sessionIds = new Set(
+    pageTreeTargetIds(pageRootTargetId(targetId))
+      .map(id => targetStates.get(id)?.sessionId)
+      .filter(Boolean),
+  )
   for (const [id, entry] of pending) {
-    if (entry.sessionId !== sessionId || !DIALOG_BLOCKED_METHOD(entry.method)) {
+    if (!sessionIds.has(entry.sessionId) || DIALOG_SAFE_METHOD(entry.method)) {
       continue
     }
     pending.delete(id)
-    entry.reject(new PageDialogOpenedError(entry.method, sessionId, dialog))
+    entry.reject(
+      new PageDialogOpenedError(entry.method, entry.sessionId, dialog),
+    )
   }
 }
 

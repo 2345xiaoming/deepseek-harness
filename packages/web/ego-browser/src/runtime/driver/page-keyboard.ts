@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.0.0-beta.4 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 export type PageKeyboardServices = {
   cdp(
     method: string,
@@ -236,13 +236,19 @@ export class PageKeyboardController {
   }
 }
 
+function describeClipboardArgument(value: unknown): string {
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return 'an array'
+  return typeof value
+}
+
 function assertClipboardContent(
   content: unknown,
 ): asserts content is PageClipboardContent {
   if (typeof content === 'string') return
   if (!content || typeof content !== 'object' || Array.isArray(content)) {
     throw new TypeError(
-      'page.keyboard.paste requires a string or { text, html? }',
+      `page.keyboard.paste requires a string or { text, html? }, received ${describeClipboardArgument(content)}`,
     )
   }
   const value = content as Record<string, unknown>
@@ -288,9 +294,9 @@ function resolveSmartModifier(
   key: string,
   platform: string = process.platform,
 ): string {
-  // Modifier names are forgiving because agents often use protocol-style
-  // uppercase constants. Ordinary key names remain case-sensitive.
-  const normalized = MODIFIER_ALIASES.get(key.toLowerCase()) ?? key
+  const lower = key.toLowerCase()
+  const normalized =
+    MODIFIER_ALIASES.get(lower) ?? NAMED_KEY_NAMES.get(lower) ?? key
   if (normalized === 'ControlOrMeta') {
     return platform === 'darwin' ? 'Meta' : 'Control'
   }
@@ -529,6 +535,11 @@ function buildKeyboardLayout(): Map<string, KeyDefinition> {
 }
 
 const keyboardLayout = buildKeyboardLayout()
+const NAMED_KEY_NAMES = new Map(
+  [...keyboardLayout.keys()]
+    .filter(key => key.length > 1)
+    .map(key => [key.toLowerCase(), key]),
+)
 
 function editingCommands(
   code: string,
