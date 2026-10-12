@@ -1,5 +1,7 @@
 # Domain Docs
 
+English | [中文](domain.zh.md)
+
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
 ## Before exploring, read these
