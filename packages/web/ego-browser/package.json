@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-ego-browser",
   "description": "Browser automation toolkit for DSH agents: a self-contained CDP-over-WebSocket bridge (no closed-source ego runtime) that drives the local Chrome instance through the ego-browser harness. Provides browser_snapshot/goto/click/js/screenshot/wait tools plus a browser_run escape hatch.",
-  "version": "0.2.1-alpha.1",
+  "version": "0.2.1-alpha.2",
   "publishConfig": {
     "access": "public"
   },
