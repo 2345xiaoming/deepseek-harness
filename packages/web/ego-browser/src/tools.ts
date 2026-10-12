@@ -35,7 +35,7 @@ function formatSnapshotResult(raw: SnapshotResult): string {
   const lines = [raw.content ?? '']
   const refLines: string[] = []
   for (const ref of raw.refs ?? []) {
-    if (ref?.backendNodeId === undefined) continue
+    if (ref.backendNodeId === undefined) continue
     refLines.push(`@${ref.backendNodeId} [${ref.role || ''}${ref.name ? `: ${ref.name}` : ''}]`)
   }
   if (refLines.length > 0) {
@@ -92,14 +92,14 @@ export function applyEgoBrowserTools(ctx: Context): void {
               wait: true,
               ...secondsOption(timeoutMs),
             })
-            loaded = Boolean(result?.loaded)
+            loaded = result.loaded
           } catch (error) {
             // Chrome's Page.navigate response can lag behind the navigation on slow
             // sites (it waits for the load to settle); the page often arrives anyway.
             // Verify by URL instead of failing the call.
             if (error instanceof Error && /timed out/i.test(error.message)) {
-              const info = await pageInfo().catch(() => null)
-              const arrived = info && (info as { url?: string }).url?.split('?')[0] === args.url.split('?')[0]
+              const info = (await pageInfo().catch(() => null)) as { url?: string } | null
+              const arrived = info?.url?.split('?')[0] === args.url.split('?')[0]
               if (arrived) {
                 await waitForLoad({ ...secondsOption(timeoutMs) }).catch(() => {})
                 return `navigated to ${args.url} (navigation response lagged; page reached target URL)`
@@ -144,7 +144,7 @@ String expressions are wrapped in an async IIFE, so top-level statements and \`r
         },
         output: { schema: { type: 'string' }, render: textRender },
         async execute(args: { expression: string }) {
-          const value = await js(`(async () => { ${args.expression} })()`)
+          const value: unknown = await js(`(async () => { ${args.expression} })()`)
           return value === undefined ? 'undefined' : JSON.stringify(value)
         },
       }),
@@ -189,18 +189,16 @@ String expressions are wrapped in an async IIFE, so top-level statements and \`r
         async execute(args: { selector?: string; state?: string; loadState?: string; timeout?: number }) {
           const timeoutMs = args.timeout ?? 10000
           if (args.loadState === 'networkidle') {
-            return Boolean(await waitForNetworkIdle({ ...secondsOption(timeoutMs) }))
+            return await waitForNetworkIdle({ ...secondsOption(timeoutMs) })
           }
           if (args.loadState) {
-            return Boolean(await waitForLoad({ ...secondsOption(timeoutMs) }))
+            return await waitForLoad({ ...secondsOption(timeoutMs) })
           }
           if (!args.selector) throw new Error('browser_wait requires selector or loadState')
-          return Boolean(
-            await waitForElement(args.selector, {
-              ...secondsOption(timeoutMs),
-              visible: args.state === 'visible',
-            }),
-          )
+          return await waitForElement(args.selector, {
+            ...secondsOption(timeoutMs),
+            visible: args.state === 'visible',
+          })
         },
       }),
     ),

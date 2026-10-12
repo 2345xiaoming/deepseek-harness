@@ -92,5 +92,5 @@ node packages/web/ego-browser/tests/smoke.mjs
 
 ## Known Limitations and Deferred Work
 
-- `src/runtime/` 整片以 `// @ts-nocheck` 豁免仓库 strict 剖面，CDP 载荷仍是上游的松散类型；`.oxlintrc.json` 的 ego-browser 覆盖只关掉 `ban-ts-comment`/`no-explicit-any`/`no-non-null-assertion`，该移植面因此仍带着类型感知 lint 告警。
+- `src/runtime/` 整片以 `// @ts-nocheck` 豁免仓库 strict 剖面，CDP 载荷仍是上游的松散类型；`.oxlintrc.json` 因此把该移植面（且仅该移植面）从松散类型必然触发的类型感知规则中排除。`src/bridge/**`、`src/tools.ts`、`src/index.ts`、`tests/**` 仍走严格剖面。
 - 上游每个源文件都配有 `*.test.mjs`，本包只移植了桥接与工具级用例；上游针对 ref 身份与 iframe 的回归用例未随移植带入。

@@ -70,19 +70,19 @@ interface SnapshotDocument {
   layout?: SnapshotLayoutTable
 }
 
+/** A CDP AX property: a primitive or an AXValue wrapper (`{ type, value, ... }`). */
+type AxValue = string | number | boolean | { value?: string | number | boolean | null }
+
 /** Extract the accessible value string from an AX property. */
-function axString(value: unknown): string {
+function axString(value: AxValue | undefined | null): string {
   if (value === undefined || value === null) return ''
   if (typeof value === 'string') return value
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  if (typeof value === 'object') {
-    // CDP AXValue: { type, value, ... }
-    const v = (value as { value?: unknown }).value
-    if (v === undefined || v === null) return ''
-    if (typeof v === 'string') return v
-    return String(v)
-  }
-  return String(value)
+  // CDP AXValue: { type, value, ... }
+  const v = value.value
+  if (v === undefined || v === null) return ''
+  if (typeof v === 'string') return v
+  return String(v)
 }
 
 // Roles whose names/values are not useful as a standalone leaf line.
@@ -179,7 +179,7 @@ export function buildSnapshot(
       const key = `${role}|${name || ''}`
       const refEligible =
         visibleBackendNodeIds === undefined || hasVisibleBox(node)
-      if (backendNodeId !== undefined && backendNodeId !== null && refEligible && !PRUNE_ROLES.has(role) && !seen.has(key)) {
+      if (backendNodeId !== undefined && refEligible && !PRUNE_ROLES.has(role) && !seen.has(key)) {
         seen.add(key)
         refs.push({ backendNodeId, role, name })
       }
@@ -254,11 +254,12 @@ async function activePageTargetId(): Promise<string> {
   const res = await fetch(`http://127.0.0.1:${instance.port}/json/list`)
   const list = (await res.json()) as Array<{ id: string; type: string }>
   const pages = list.filter(t => t.type === 'page')
-  if (pages.length === 0) {
+  // Last page target matches the harness active-tab fallback.
+  const last = pages.at(-1)
+  if (last === undefined) {
     throw new Error('dsh-ego-browser: no page target to snapshot')
   }
-  // Last page target matches the harness active-tab fallback.
-  return pages[pages.length - 1]!.id
+  return last.id
 }
 
 /**

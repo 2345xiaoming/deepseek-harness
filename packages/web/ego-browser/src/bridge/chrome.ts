@@ -161,6 +161,17 @@ export async function getChrome(): Promise<ChromeInstance> {
   return instance
 }
 
+/** SIGKILL and profile removal for an instance replaced before it was disposed. */
+function reapChrome(previous: ChromeInstance): void {
+  const { process: proc, profileDir } = previous
+  try {
+    if (isRunning(proc)) proc.kill('SIGKILL')
+  } catch {
+    // already gone
+  }
+  rmSync(profileDir, { recursive: true, force: true })
+}
+
 /**
  * Adopt an externally started instance as the shared one (test seam: a test that
  * launched Chrome itself can hand it to the ws-cdp transport so `sendRaw` talks
@@ -170,16 +181,13 @@ export function adoptChrome(instance: ChromeInstance): void {
   const previous = current
   current = instance
   if (previous && previous !== instance) {
-    void (async () => {
-      const { process: proc, profileDir } = previous
-      try {
-        if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL')
-      } catch {
-        // already gone
-      }
-      rmSync(profileDir, { recursive: true, force: true })
-    })()
+    reapChrome(previous)
   }
+}
+
+/** Whether the child has not exited yet; `exitCode`/`signalCode` fill in asynchronously. */
+function isRunning(proc: ChildProcess): boolean {
+  return proc.exitCode === null && proc.signalCode === null
 }
 
 /**
@@ -193,13 +201,13 @@ export async function disposeChrome(): Promise<void> {
   instance.dead = true
   const { process: proc, profileDir } = instance
   try {
-    if (proc.exitCode === null && proc.signalCode === null) {
+    if (isRunning(proc)) {
       proc.kill('SIGTERM')
       await Promise.race([
-        new Promise<void>(resolve => proc.once('exit', () => resolve())),
+        new Promise<void>(resolve => proc.once('exit', () => { resolve() })),
         new Promise<void>(resolve => setTimeout(resolve, 1500)),
       ])
-      if (proc.exitCode === null && proc.signalCode === null) {
+      if (isRunning(proc)) {
         proc.kill('SIGKILL')
       }
     }
