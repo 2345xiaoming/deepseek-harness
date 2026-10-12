@@ -1,34 +1,59 @@
+---
+description: "Browser automation for DSH agents: a self-contained CDP-over-WebSocket bridge drives the local headless Chrome for snapshot, navigation, click, JS evaluation, screenshot, and wait, plus a browser_run escape hatch over the full ego-browser harness v2 helper face."
+kind: "package-bundle"
+---
+
 # @deepseek-ai/dsh-ego-browser
 
-浏览器自动化 toolkit：DSH agent 无需闭源 ego lite 运行时，即可直接驱动本机 Chrome（headless）完成网页自动化——快照、导航、点击、JS 求值、截图、等待，外加一个 `browser_run` 逃生舱暴露 ego-browser harness v2 的完整 helper 面。
+English | [中文](README.zh.md)
 
-## 亮点
+## Summary
 
-- **自包含 CDP-over-WebSocket 桥**：复刻 ego-browser harness v2 期望的 `globalThis.ego` 接口——传输面（`sendCDPMessage`/`onCDPMessage`/`onSendCDPMessageError`/`listTabs`/`createTab`/`snapshot`）+ 任务空间面（`listTaskSpaces`/`createTaskSpace`/`useTaskSpace`/`claimTaskSpace`/`completeTaskSpace`/`closeTaskSpace`/`handOffTaskSpace`/`takeOverTaskSpace`/`animationHighlightMouseToPosition`/`setAgentTaskState`，以单一合成 agent-owned 空间承载本机 Chrome）。没有闭源运行时；运行时依赖仅 `acorn`（v2 的 run/help 解析用），`WebSocket` 由 Node 22 自带。
-- **懒启动**：插件加载（`apply`）只注册工具；首个真实浏览器调用才 spawn Chrome。没跑浏览器工具的会话零进程开销。
-- **复用整套 harness**：CDP 会话管理（15s 超时、SESSION_LOST 自动重连、10k 事件缓冲、dialog 跟踪与 dialog 打开期间的快速失败、OOPIF 自动 attach、网络跟踪）、Page/TaskSpace 对象模型与 native-operation gate 串行化、元素解析（`@N` ref / `loc=css:` / `loc=role:` / `xpath=`）、ref 跨快照/动作/轮次保持身份（`documentId` 失效检测）、iframe 快照保留与 frame-aware 子树快照、下载拦截（Playwright 风格 `Download.*`）、页面台账（page ledger）、学习子系统（site skills）全部来自 ego-browser v2 源码，经移植保留。
+With `dsh-ego-browser`, an agent drives the local Chrome (headless) through `browser_snapshot`, `browser_goto`, `browser_click`, `browser_js`, `browser_screenshot`, `browser_wait`, and the `browser_run` escape hatch, without the closed-source ego lite runtime. Chrome starts lazily on the first real browser call, so a session that never runs a browser tool pays no process cost. The shared base bundle mounts the plugin for every profile, and a profile can also enable it on demand.
 
-## 工具
+## Table of Contents
 
-| 工具 | 参数 | 说明 |
+- [Highlights](#highlights)
+- [Tools](#tools)
+- [Use this package](#use-this-package)
+- [Configuration](#configuration)
+- [Chrome](#chrome)
+- [Positioning against the existing DSH web tools](#positioning-against-the-existing-dsh-web-tools)
+- [Development](#development)
+- [Porting notes](#porting-notes)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+
+<a id="highlights"></a>
+## Highlights
+
+- **Self-contained CDP-over-WebSocket bridge**: it reproduces the `globalThis.ego` interface that ego-browser harness v2 expects — the transport face (`sendCDPMessage`/`onCDPMessage`/`onSendCDPMessageError`/`listTabs`/`createTab`/`snapshot`) and the task-space face (`listTaskSpaces`/`createTaskSpace`/`useTaskSpace`/`claimTaskSpace`/`completeTaskSpace`/`closeTaskSpace`/`handOffTaskSpace`/`takeOverTaskSpace`/`animationHighlightMouseToPosition`/`setAgentTaskState`), carrying the local Chrome in a single synthetic agent-owned space. There is no closed-source runtime; the only runtime dependency is `acorn` (used by the v2 run/help parsing), and Node 22 ships `WebSocket`.
+- **Lazy start**: loading the plugin (`apply`) registers tools only; the first real browser call spawns Chrome. A session that never runs a browser tool pays no process cost.
+- **The whole harness is reused**: CDP session management (15s timeout, automatic reconnect on SESSION_LOST, 10k event buffer, dialog tracking with fast failure while a dialog is open, automatic OOPIF attach, network tracking), the Page/TaskSpace object model with native-operation gate serialization, element resolution (`@N` ref / `loc=css:` / `loc=role:` / `xpath=`), refs that keep their identity across snapshots, actions, and turns (`documentId` invalidation detection), iframe snapshot preservation with frame-aware subtree snapshots, download interception (Playwright-style `Download.*`), the page ledger, and the learning subsystem (site skills) all come from the ego-browser v2 source, preserved through the port.
+
+<a id="tools"></a>
+## Tools
+
+| Tool | Parameters | Purpose |
 |---|---|---|
-| `browser_snapshot` | `scope?` `only_within_viewport` / `full_page` | 可访问性快照：文本大纲 + `@N` refs 图例，agent 据此交互 |
-| `browser_goto` | `url`, `timeout?` | 导航当前标签并等待加载 |
-| `browser_click` | `target`（`@N` / `loc=` / `xpath=` / CSS）, `timeout?` | 点击元素 |
-| `browser_js` | `expression` | 页面内求值 JS 表达式，返回序列化结果 |
-| `browser_screenshot` | `path?`, `fullPage?` | 截图 PNG，返回文件路径 |
-| `browser_wait` | `selector` / `loadState`, `timeout?` | 等待元素（attached/visible）或加载态 |
-| `browser_run` | `js` | 逃生舱：执行任意 helper JS，暴露完整 v2 helper face（扁平函数：`snapshot`/`gotoAndWait`/`click`/`js`/`cdp`/`waitForElement`…；任务空间：`taskSpace()`/`newTaskSpace()`/`claimTaskSpace()`…；site skills：`runSiteTool`/`learnContext`），`console.log` 被捕获返回 |
+| `browser_snapshot` | `scope?`: `only_within_viewport` / `full_page` | Accessibility snapshot: a text outline plus the `@N` refs legend the agent interacts through |
+| `browser_goto` | `url`, `timeout?` | Navigate the current tab and wait for it to load |
+| `browser_click` | `target` (`@N` / `loc=` / `xpath=` / CSS), `timeout?` | Click an element |
+| `browser_js` | `expression` | Evaluate a JS expression in the page and return the serialized result |
+| `browser_screenshot` | `path?`, `fullPage?` | Capture a PNG screenshot and return the file path |
+| `browser_wait` | `selector` / `loadState`, `timeout?` | Wait for an element (attached/visible) or a load state |
+| `browser_run` | `js` | Escape hatch: run arbitrary helper JS with the full v2 helper face (flat helpers: `snapshot`/`gotoAndWait`/`click`/`js`/`cdp`/`waitForElement`…; task space: `taskSpace()`/`newTaskSpace()`/`claimTaskSpace()`…; site skills: `runSiteTool`/`learnContext`); `console.log` is captured and returned |
 
-## 装配
+<a id="use-this-package"></a>
+## Use this package
 
-官方 bundle 装配：`packages/bundle/base/cordis.patch.yml` 挂载 `ego-browser` 行（所有 profile 共享）。需重新构建 DSH host 侧产物并重启生效：
+The official bundle mounts it: `packages/bundle/base/cordis.patch.yml` carries the `ego-browser` row shared by every profile. The DSH host artifacts must be rebuilt and the process restarted for the change to take effect:
 
 ```bash
 pnpm build:lib
 ```
 
-如需按需启用（而非 base 全局），把 `packages/bundle/base/cordis.patch.yml` 里 `- id: ego-browser` 一行移除/禁用，改为在 profile 的 `cordis.patch.yml` 中：
+To enable it on demand instead of globally through base, remove or disable the `- id: ego-browser` row in `packages/bundle/base/cordis.patch.yml` and add this to the profile's `cordis.patch.yml`:
 
 ```yaml
 - insert:
@@ -37,27 +62,31 @@ pnpm build:lib
       config: {}
 ```
 
-## 配置
+<a id="configuration"></a>
+## Configuration
 
-`schemastery` 配置对象：
+The `schemastery` config object:
 
 ```json
 { "enabled": true }
 ```
 
-`enabled: false` 时插件不安装桥、不注册工具。
+With `enabled: false` the plugin installs no bridge and registers no tool.
 
+<a id="chrome"></a>
 ## Chrome
 
-- 二进制查找顺序：`DSH_EGO_BROWSER_CHROME` 环境变量 → `google-chrome` / `google-chrome-stable` / `chromium` / `chromium-browser`（PATH + 常见目录）。
-- 启动参数：`--headless=new --remote-debugging-port=0 --user-data-dir=<tmp>` + 容器必需的 `--no-sandbox`；端口从 `DevToolsActivePort` 读取。
-- 生命周期由插件持有：`ctx.effect` dispose（热重载/卸载）时回收进程并删除临时 profile。
+- Binary lookup order: the `DSH_EGO_BROWSER_CHROME` environment variable → `google-chrome` / `google-chrome-stable` / `chromium` / `chromium-browser` (PATH plus common directories).
+- Launch arguments: `--headless=new --remote-debugging-port=0 --user-data-dir=<tmp>`, plus `--no-sandbox`, which containers require; the port is read from `DevToolsActivePort`.
+- The plugin owns the lifecycle: `ctx.effect` dispose (hot reload or unload) reclaims the process and deletes the temporary profile.
 
-## 与 DSH 现有 web 工具的定位差异
+<a id="positioning-against-the-existing-dsh-web-tools"></a>
+## Positioning against the existing DSH web tools
 
-`web_search` / `web_fetch` 是模型面的搜索与抓取；`browser_*` 是**可交互**的浏览器自动化（快照带 refs、真实点击/输入/表单填充、页面内 JS、截图、文件上传）。需要"打开页面 → 观察 → 操作"时用本插件；只查资料用 `web_search`。
+`web_search` / `web_fetch` search and fetch for the model; `browser_*` is **interactive** browser automation (snapshots carrying refs, real clicking/typing/form filling, in-page JS, screenshots, file upload). Use this plugin when the task is "open a page → observe → act"; use `web_search` to look information up.
 
-## 开发
+<a id="development"></a>
+## Development
 
 ```bash
 # 类型检查（包级）
@@ -73,24 +102,51 @@ pnpm vitest run packages/web/ego-browser/tests/
 node packages/web/ego-browser/tests/smoke.mjs
 ```
 
-## 移植说明
+<a id="porting-notes"></a>
+## Porting notes
 
-`src/runtime/` 是从 [citrolabs/ego-lite](https://github.com/citrolabs/ego-lite) tag `v2.1.0-beta.2`（`package/ego-browser/src`）移植的 harness 源码，与上游保持 1:1 文件对应（仅不含上游的包入口 `index.ts`，由本包的 `src/index.ts` 取代）。import 后缀 `.js`→`.ts` 适配 DSH 的 `moduleResolution: bundler`，并以 `// @ts-nocheck` 豁免其原 `strict:false` 下的隐式 any（vendor 移植豁免；本包自写代码保持严格检查）。移植面包括 `page-model.ts`/`page-ledger.ts`/`page-discovery.ts`/`native-gate.ts`/`public-api-schema.ts`/`snapshot-result.ts`/`clipboard.ts`/`skill-migration.ts`/`driver/downloads.ts` 等。桥实现见 `src/bridge/`（`chrome.ts` 生命周期、`ws-cdp.ts` CDP 传输 + 任务空间 shim、`snapshot.ts` AX 快照）。
+`src/runtime/` is harness source ported from [citrolabs/ego-lite](https://github.com/citrolabs/ego-lite) tag `v2.1.0-beta.2` (`package/ego-browser/src`), keeping a 1:1 file correspondence with upstream (it omits only upstream's package entry `index.ts`, which this package's `src/index.ts` replaces). Import suffixes changed from `.js` to `.ts` for DSH's `moduleResolution: bundler`, and `// @ts-nocheck` exempts the implicit any of upstream's `strict:false` (a vendor-port exemption; this package's own code keeps strict checking). The ported surface includes `page-model.ts`/`page-ledger.ts`/`page-discovery.ts`/`native-gate.ts`/`public-api-schema.ts`/`snapshot-result.ts`/`clipboard.ts`/`skill-migration.ts`/`driver/downloads.ts` and others. The bridge lives in `src/bridge/` (`chrome.ts` lifecycle, `ws-cdp.ts` CDP transport plus the task-space shim, `snapshot.ts` AX snapshot).
 
-重移植时需重新施加的本地改动（上游未收录，均为 DSH 侧必需）：
+Local changes to re-apply on a re-port (not accepted upstream; all required on the DSH side):
 
-- `driver/nav.ts`：`gotoAndWait` 在 `Page.navigate` 返回 `errorText` 或 `isDownload` 时抛错，避免把失败导航报成成功。
-- `helpers.ts`：`taskSpace`/`useOrCreateTaskSpace`/`claimTaskSpace`/`takeOverTaskSpace` 补显式返回类型标注（声明合成无法命名匿名类的私有成员）。
-- `page-ledger.ts`：动态删除改用 `Reflect.deleteProperty`（`typescript/no-dynamic-delete` 为 error 且不可自动修复）。
-- `skill-migration.ts`：恢复指令保留 DSH 措辞——上游文本指向其自有 CLI `ego-browser skill`，本包不提供该命令。
-- `learning/index.ts`：保留 `returns` 字段；示例文本随上游（`runSiteTool`/`runSiteBrowserTool` 才是本包实际暴露的扁平 helper）。
-- `page-context-guard.ts`：字符类写作 `[a-z_$]`（该正则带 `/i`，与上游 `[A-Za-z_$]` 等价）。
-- 移植面 lint 适配：`clipboard.ts` 的 catch 参数写作 `_error`；`element-resolver.ts` 中未使用的上游函数保留 `no-unused-vars` 豁免；`page-model.ts` 中闭包先读、随后赋值的 `timer` 保留 `prefer-const` 豁免。
-- `../index.ts`（本包入口）：把 `help()` 文本绑到 `browser_run` 的本次输出，并在 dispose 时回收下载产物。
+- `driver/nav.ts`: `gotoAndWait` throws when `Page.navigate` returns `errorText` or `isDownload`, so a failed navigation is not reported as a success.
+- `helpers.ts`: `taskSpace`/`useOrCreateTaskSpace`/`claimTaskSpace`/`takeOverTaskSpace` carry explicit return type annotations (declaration synthesis cannot name the anonymous class's private members).
+- `page-ledger.ts`: dynamic deletion goes through `Reflect.deleteProperty` (`typescript/no-dynamic-delete` is an error with no autofix).
+- `skill-migration.ts`: the restore instruction keeps DSH wording — the upstream text points at upstream's own CLI `ego-browser skill`, which this package does not provide.
+- `learning/index.ts`: the `returns` field is retained; the example text follows upstream (`runSiteTool`/`runSiteBrowserTool` are the flat helpers this package actually exposes).
+- `page-context-guard.ts`: the character class is written `[a-z_$]` (the regex carries `/i`, equivalent to upstream's `[A-Za-z_$]`).
+- Ported-surface lint adaptations: the `clipboard.ts` catch parameter is written `_error`; unused upstream functions in `element-resolver.ts` keep a `no-unused-vars` exemption; the `timer` in `page-model.ts` that a closure reads before it is assigned keeps a `prefer-const` exemption.
+- `../index.ts` (this package's entry): binds `help()` text to that `browser_run` output and reclaims download artifacts on dispose.
 
-风格统一只跑 `@stylistic/*` 规则，不要对移植面跑全量 `oxlint --fix`：`typescript/no-useless-default-assignment` 等规则会改写 `js()` 这类为严格调用方保留的可选形参。
+<a id="model-experience"></a>
+## Model Experience
+
+### Browser tool definitions
+
+#### What the model sees
+
+Every request in a session that mounts the plugin carries the seven tool definitions it registers — `browser_snapshot`, `browser_goto`, `browser_click`, `browser_js`, `browser_screenshot`, `browser_wait`, and `browser_run` — with their fixed English descriptions and parameter schemas. Results are plain text: the snapshot outline with its `@N` refs legend, `navigated to <url>`, `clicked: <target>`, the JSON-serialized `browser_js` value, `screenshot saved: <path>`, the `browser_wait` boolean, and `browser_run`'s captured `console.log` output or `(no output)`. The plugin contributes no system-prompt text.
+
+#### Token effect
+
+The seven definitions and their descriptions are a fixed prefix cost on every request once the plugin is mounted. Each call then appends its text result, and `browser_snapshot` or `browser_run` can add a large block on a big page.
+
+#### KV Cache effect
+
+The definitions do not change between requests, so they preserve an already-reusable prefix; a call appends its result and never replaces earlier request tokens.
 
 ## Known Limitations and Deferred Work
 
-- `src/runtime/` 整片以 `// @ts-nocheck` 豁免仓库 strict 剖面，CDP 载荷仍是上游的松散类型；`.oxlintrc.json` 因此把该移植面（且仅该移植面）从松散类型必然触发的类型感知规则中排除。`src/bridge/**`、`src/tools.ts`、`src/index.ts`、`tests/**` 仍走严格剖面。
-- 上游的 `*.test.mjs` 未整体移植：本包现覆盖 ref 身份、iframe 归属、snapshot 消毒与 download 路径校验四类契约，上游其余用例（CDP 调用计数、快照压缩、墓碑上限、真实下载完成路径与端到端）仍只在 upstream 侧。
+<a id="known-limitations-and-deferred-work"></a>
+
+- The whole of `src/runtime/` is exempt from the repository's strict profile by `// @ts-nocheck`, and the CDP payloads keep upstream's loose types; `.oxlintrc.json` therefore excludes that ported surface (and only that surface) from the type-aware rules that loose types necessarily trip. `src/bridge/**`, `src/tools.ts`, `src/index.ts`, and `tests/**` stay under the strict profile.
+- Upstream's `*.test.mjs` cases were not ported wholesale: this package covers four contracts — ref identity, iframe ownership, snapshot sanitization, and download path validation — while the remaining upstream cases (CDP call counts, snapshot compression, tombstone limits, the real download completion path, and end to end) still live upstream only.
+
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+Run only the `@stylistic/*` rules for style normalization; do not run the full `oxlint --fix` over the ported surface, because rules such as `typescript/no-useless-default-assignment` rewrite optional parameters like the one on `js()` that are kept for strict callers.
+
+</details>
