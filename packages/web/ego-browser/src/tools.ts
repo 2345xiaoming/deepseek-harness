@@ -158,7 +158,7 @@ String expressions are wrapped in an async IIFE, so top-level statements and \`r
         name: 'browser_screenshot',
         description: 'Capture a screenshot of the current page to a PNG file and return its path.',
         parameters: {
-          path: { type: 'string', description: 'Output PNG path (default: temp file).' },
+          path: { type: 'string', description: 'Absolute output PNG path (default: temp file).' },
           fullPage: { type: 'boolean', description: 'Capture the full scrollable page (default false).' },
         },
         output: { schema: { type: 'string' }, render: textRender },
