@@ -43,8 +43,8 @@ export interface LoaderEntryFace {
   readonly options: {
     /** Module name of the row (the plugin package). */
     name?: string
-    /** Whether the entry is disabled at the options level. */
-    disabled?: boolean
+    /** Whether the entry is disabled at the options level; `EntryOptions.disabled` is nullable. */
+    disabled?: boolean | null
     /** The mcp-client plugin config of the row. */
     config?: Record<string, unknown>
   }
@@ -391,7 +391,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
 
   /** Every loader row mounting an mcp-client instance, with its serverName. */
   function configRowsOf(): McpConfigRowStatus[] {
-    const loader = ctx.get('loader') as unknown as LoaderFace | undefined
+    // `ctx.get` is the typed accessor for the `loader` service that
+    // `cordis-plugin-loader` declares on `Context`; unlike `ctx.loader` it does
+    // not demand a static `inject` entry, and the guard keeps a host without the
+    // service (this plugin is useful without the loader) on the empty path.
+    const loader: LoaderFace | undefined = ctx.get('loader')
     if (loader === undefined) return []
     const rows: McpConfigRowStatus[] = []
     for (const entry of loader.entries()) {
@@ -427,7 +431,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
    * patch row (the loader include re-applies it, surviving restarts).
    */
   async function setConfigRowEnabled(serverName: string, enabled: boolean): Promise<void> {
-    const loader = ctx.get('loader') as unknown as LoaderFace | undefined
+    const loader: LoaderFace | undefined = ctx.get('loader')
     if (loader === undefined) throw new Error('mcp-settings: loader service is unavailable')
     let target: LoaderEntryFace | undefined
     for (const entry of loader.entries()) {
