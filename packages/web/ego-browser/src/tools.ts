@@ -2,9 +2,9 @@
  * Thin `defineTool` wrappers over the v2 ego-browser harness's flat helper
  * surface (ported to src/runtime from ego-lite v2.0.0-beta.4). The tool
  * contracts are unchanged from the v1 port: snapshot → @N refs, goto/click by
- * ref or locator, JS eval with async-IIFE wrapping, screenshot file output and
- * wait helpers; `browser_run` (registered in index.ts) remains the escape
- * hatch for the full helper face.
+ * ref or locator, JS eval whose result is the script completion value or an
+ * explicit `return`, screenshot file output and wait helpers; `browser_run`
+ * (registered in index.ts) remains the escape hatch for the full helper face.
  */
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -20,6 +20,7 @@ import {
   waitForLoad,
   waitForNetworkIdle,
 } from './runtime/helpers.ts'
+import { browserJsSource } from './runtime/js-source.ts'
 
 const textRender = (_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> => [
   { type: 'text', text: String(value) },
@@ -137,15 +138,19 @@ export function applyEgoBrowserTools(ctx: Context): void {
     ctx.tools.register(
       defineTool({
         name: 'browser_js',
-        description: `Evaluate a JavaScript expression in the current page and return the serialized result.
-String expressions are wrapped in an async IIFE, so top-level statements and \`return\` work.`,
+        description: `Evaluate JavaScript in the current page and return the serialized result.
+The result is the script's completion value or an explicit \`return\`; top-level \`await\` is supported.`,
         parameters: {
-          expression: { type: 'string', required: true, description: 'JavaScript expression or body; wrapped in an async IIFE before evaluation.' },
+          expression: { type: 'string', required: true, description: 'JavaScript expression or statement body.' },
         },
         output: { schema: { type: 'string' }, render: textRender },
         async execute(args: { expression: string }) {
-          const value: unknown = await js(`(async () => { ${args.expression} })()`)
-          return value === undefined ? 'undefined' : JSON.stringify(value)
+          const value: unknown = await js(browserJsSource(args.expression))
+          if (value === undefined) return 'undefined'
+          // BigInt reaches here through CDP's unserializableValue, and
+          // JSON.stringify throws on it instead of returning text.
+          if (typeof value === 'bigint') return String(value)
+          return JSON.stringify(value)
         },
       }),
     ),

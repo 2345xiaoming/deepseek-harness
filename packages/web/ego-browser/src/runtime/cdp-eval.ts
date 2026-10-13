@@ -1,6 +1,6 @@
 // @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
-import { parse } from 'acorn'
 
+import { hasReturnStatement } from './js-source.ts'
 import { browserCdp } from './browser-runtime.ts'
 import { state } from './state.ts'
 
@@ -155,40 +155,4 @@ export function decodeUnserializableJsValue(value) {
 function jsSnippet(expression, limit = 160) {
   const snippet = expression.trim().replace(/\n/g, '\\n')
   return snippet.length > limit ? `${snippet.slice(0, limit - 3)}...` : snippet
-}
-
-/**
- * Whether the source has a `return` outside any nested function, meaning it
- * must be wrapped in a function before Runtime.evaluate accepts it.
- */
-export function hasReturnStatement(expression) {
-  try {
-    return containsOuterReturn(
-      parse(expression, {
-        ecmaVersion: 'latest',
-        allowReturnOutsideFunction: true,
-        allowAwaitOutsideFunction: true,
-      }),
-    )
-  } catch {
-    // Leave invalid or unsupported syntax untouched for the browser to report.
-    return false
-  }
-}
-
-function containsOuterReturn(node) {
-  if (!node || typeof node !== 'object') return false
-  if (node.type === 'ReturnStatement') return true
-  if (
-    node.type === 'FunctionDeclaration' ||
-    node.type === 'FunctionExpression' ||
-    node.type === 'ArrowFunctionExpression'
-  ) {
-    return false
-  }
-  return Object.values(node).some(child =>
-    Array.isArray(child)
-      ? child.some(containsOuterReturn)
-      : containsOuterReturn(child),
-  )
 }

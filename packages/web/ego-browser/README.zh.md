@@ -39,7 +39,7 @@ kind: "package-bundle"
 | `browser_snapshot` | `scope?`：`only_within_viewport` / `full_page` | 可访问性快照：文本大纲 + `@N` refs 图例，agent 据此交互 |
 | `browser_goto` | `url`、`timeout?` | 导航当前标签并等待加载 |
 | `browser_click` | `target`（`@N` / `loc=` / `xpath=` / CSS）、`timeout?` | 点击元素 |
-| `browser_js` | `expression` | 页面内求值 JS 表达式，返回序列化结果 |
+| `browser_js` | `expression` | 页面内求值 JS 并返回序列化结果：脚本完成值或显式 `return`；支持顶层 `await` |
 | `browser_screenshot` | `path?`、`fullPage?` | 截图 PNG，返回文件路径 |
 | `browser_wait` | `selector` / `loadState`、`timeout?` | 等待元素（attached/visible）或加载态 |
 | `browser_run` | `js` | 逃生舱：执行任意 helper JS，暴露完整 v2 helper face（扁平函数：`snapshot`/`gotoAndWait`/`click`/`js`/`cdp`/`waitForElement`…；任务空间：`taskSpace()`/`newTaskSpace()`/`claimTaskSpace()`…；site skills：`runSiteTool`/`learnContext`），`console.log` 被捕获返回 |
