@@ -118,6 +118,7 @@ Local changes to re-apply on a re-port (not accepted upstream; all required on t
 - Ported-surface lint adaptations: the `clipboard.ts` catch parameter is written `_error`; unused upstream functions in `element-resolver.ts` keep a `no-unused-vars` exemption; the `timer` in `page-model.ts` that a closure reads before it is assigned keeps a `prefer-const` exemption.
 - `driver/keyboard.ts`: the `dispatchKey` JSDoc keeps the synthetic-event consequence but drops upstream's reference to its own issue document, which this repository does not carry.
 - `../index.ts` (this package's entry): binds `help()` text to that `browser_run` output and reclaims download artifacts on dispose.
+- `driver/pointer.ts`: a mouse target is scrolled into view before its point is measured. `elementCenter` reads the viewport-relative rect without scrolling, so a target below the fold sent the press to the document root while the tool still reported success.
 
 <a id="model-experience"></a>
 ## Model Experience

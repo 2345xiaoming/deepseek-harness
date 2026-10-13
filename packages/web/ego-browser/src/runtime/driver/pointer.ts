@@ -1,6 +1,7 @@
 // @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 import { cdp, js } from '../cdp-eval.ts'
 import { browserCdp } from '../browser-runtime.ts'
+import { ensureRefMapForRef } from '../ref-state.ts'
 import { elementCenter } from './observe.ts'
 import { resolveAndCall } from './element-ops.ts'
 
@@ -622,8 +623,41 @@ function isInputDispatchTimeout(error: unknown) {
   return /CDP request timed out: Input\.dispatchMouseEvent/.test(message)
 }
 
+/**
+ * Bring a mouse target on screen before its point is measured.
+ *
+ * The center is read from `getBoundingClientRect`, which is viewport-relative
+ * and does not scroll. A target below the fold therefore resolves to a point
+ * outside the viewport, `Input.dispatchMouseEvent` delivers the press to the
+ * document root, and the action reports success without touching the element.
+ * Centering the target keeps the measured point inside the viewport; the jump
+ * is instant so the following measurement cannot read an in-flight scroll.
+ * @param {string} selectorOrRef CSS selector or @ref.
+ * @returns {Promise<void>}
+ */
+async function scrollTargetIntoView(selectorOrRef: string) {
+  await ensureRefMapForRef(selectorOrRef)
+  await resolveAndCall(
+    selectorOrRef,
+    `function () {
+      const view = this.ownerDocument?.defaultView;
+      if (!view) return false;
+      const rect = this.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return false;
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const inViewport = centerX >= 0 && centerY >= 0 &&
+        centerX < view.innerWidth && centerY < view.innerHeight;
+      if (inViewport) return false;
+      this.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+      return true;
+    }`,
+  )
+}
+
 async function resolveMouseTarget(target: MouseTarget): Promise<Point> {
   if (typeof target === 'string') {
+    await scrollTargetIntoView(target)
     return elementCenter(target)
   }
   if (Array.isArray(target)) {
@@ -635,6 +669,7 @@ async function resolveMouseTarget(target: MouseTarget): Promise<Point> {
       typeof target.selector === 'string' &&
       target.selector
     ) {
+      await scrollTargetIntoView(target.selector)
       if (target.x === undefined && target.y === undefined) {
         return elementCenter(target.selector)
       }

@@ -118,6 +118,7 @@ node packages/web/ego-browser/tests/smoke.mjs
 - 移植面 lint 适配：`clipboard.ts` 的 catch 参数写作 `_error`；`element-resolver.ts` 中未使用的上游函数保留 `no-unused-vars` 豁免；`page-model.ts` 中闭包先读、随后赋值的 `timer` 保留 `prefer-const` 豁免。
 - `driver/keyboard.ts`：`dispatchKey` 的 JSDoc 保留合成事件的后果说明，但去掉了指向上游自有 issue 文档的引用——本仓库没有该文档。
 - `../index.ts`（本包入口）：把 `help()` 文本绑到 `browser_run` 的本次输出，并在 dispose 时回收下载产物。
+- `driver/pointer.ts`：测量鼠标目标坐标前先把它滚入视口。`elementCenter` 读取的是视口相对矩形且不滚动，首屏外的目标会把按键派发到文档根节点，而工具仍报成功。
 
 <a id="model-experience"></a>
 ## 模型体验
