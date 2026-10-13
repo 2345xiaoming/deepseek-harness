@@ -13,6 +13,10 @@ import { invokeEgo } from '../ego-errors.ts'
 import { state } from '../state.ts'
 import { waitForDocumentLoad } from './load.ts'
 
+/**
+ * URL prefixes Chrome reserves for its own pages, used to keep internal targets
+ * out of tab listings and real-tab checks.
+ */
 export const INTERNAL_URL_PREFIXES = [
   'chrome://',
   'chrome-untrusted://',
@@ -58,10 +62,10 @@ type NavigationResult = {
 
 /**
  * Navigate the current tab to a URL using CDP Page.navigate.
- * @param {string} url Absolute or browser-supported URL to load.
- * @returns {Promise<object>} CDP Page.navigate result.
+ * @param url - absolute or browser-supported URL to load.
+ * @returns the CDP Page.navigate result; a rejected navigation still resolves with `errorText`.
  */
-export async function gotoUrl(url) {
+export async function gotoUrl(url): Promise<any> {
   return cdp('Page.navigate', { url })
 }
 
@@ -72,15 +76,15 @@ export async function gotoUrl(url) {
  * resolves `Page.navigate` with `errorText` and leaves the tab on Chrome's error
  * page, so reporting the URL as reached would be false. Mirrors the Page.goto
  * contract in driver/page-waits.ts.
- * @param {string} url Absolute or browser-supported URL to load.
- * @param {{timeout?: number, settle?: number, wait?: boolean}} [options]
- * @returns {Promise<{navigation: object, loaded: boolean}>}
+ * @param url - absolute or browser-supported URL to load.
+ * @param options - timeout budget, settle delay after load, and whether to wait for load at all.
+ * @returns the raw `Page.navigate` result and whether the document reached `complete`.
  * @throws {Error} When Chrome reports a navigation error or a started download.
  */
 export async function gotoAndWait(
   url: string,
   options: GotoAndWaitOptions = {},
-) {
+): Promise<{ navigation: NavigationResult; loaded: boolean }> {
   const navigation = (await gotoUrl(url)) as NavigationResult
   if (typeof navigation.errorText === 'string') {
     throw new Error(`gotoAndWait failed for ${url}: ${navigation.errorText}`)
@@ -101,9 +105,10 @@ export async function gotoAndWait(
 
 /**
  * Read basic state for the current page.
- * @returns {Promise<{url:string,title:string,w:number,h:number,sx:number,sy:number,pw:number,ph:number}|{dialog:object}>}
+ * @returns the page metrics (URL, title, viewport and scroll sizes), or `{dialog}`
+ *   when a JavaScript dialog is pending.
  */
-export async function pageInfo() {
+export async function pageInfo(): Promise<any> {
   if (isBrowserRuntime()) {
     const sessionId = await ensureSession()
     const dialog = pendingDialog(sessionId)
@@ -118,8 +123,8 @@ export async function pageInfo() {
 
 /**
  * List open page targets known to the browser.
- * @param {{includeChrome?: boolean}} [options]
- * @returns {Promise<Array<{targetId:string,title:string,url:string}>>}
+ * @param options - when `includeChrome` is false, internal `chrome://` targets are omitted.
+ * @returns the open page targets, normalized to non-null title and URL strings.
  */
 export async function listTabs(
   options: ListTabsOptions = {},
@@ -146,9 +151,10 @@ export async function listTabs(
 
 /**
  * Return the currently attached tab.
- * @returns {Promise<{targetId:string,url:string,title:string}>}
+ * @returns the active tab's target id, URL, and title.
+ * @throws {Error} When no page tab is open.
  */
-export async function currentTab() {
+export async function currentTab(): Promise<{ targetId: string; url: string; title: string }> {
   const tabs = await listTabs()
   const active = tabs.find(tab => tab.active) || tabs[0]
   if (!active) {
@@ -159,10 +165,10 @@ export async function currentTab() {
 
 /**
  * Activate an existing tab target.
- * @param {string|{targetId:string}} target Target id or tab-like object.
- * @returns {Promise<string>} Target id.
+ * @param target - target id or tab-like object.
+ * @returns the activated target id, now the preferred target for later calls.
  */
-export async function switchTab(target: string | { targetId: string }) {
+export async function switchTab(target: string | { targetId: string }): Promise<string> {
   const targetId = typeof target === 'object' ? target.targetId : target
   await cdp('Target.activateTarget', { targetId })
   setPreferredTarget(targetId)
@@ -171,10 +177,11 @@ export async function switchTab(target: string | { targetId: string }) {
 
 /**
  * Open a new tab and optionally navigate it.
- * @param {string} [url="about:blank"] URL to open.
- * @returns {Promise<string>} New target id.
+ * @param url - URL to open; defaults to about:blank.
+ * @returns the new target id, now the preferred target for later calls.
+ * @throws {Error} When the browser returns no target id.
  */
-export async function newTab(url = 'about:blank') {
+export async function newTab(url = 'about:blank'): Promise<any> {
   const result = await invokeEgo('newTab', () => browserEgo().createTab(url))
   if (!result.targetId) {
     throw new Error('newTab returned no targetId')
@@ -187,14 +194,24 @@ export async function newTab(url = 'about:blank') {
 
 /**
  * Reuse an existing matching tab or open a new one.
- * @param {string} url URL to find or open.
- * @param {{match?: "exact"|"origin"|"origin+path"|"includes", wait?: boolean, timeout?: number, settle?: number}} [options]
- * @returns {Promise<{targetId:string,url:string,title:string,active:boolean,index?:number,reused:boolean}>}
+ * @param url - URL to find or open.
+ * @param options - match mode, whether to wait for load, and the timeout/settle budgets.
+ * @returns the reused or newly created tab, with `reused` marking which happened.
  */
 export async function openOrReuseTab(
   url: string,
   options: OpenOrReuseTabOptions = {},
-) {
+): Promise<
+  | {
+    active: boolean
+    reused: boolean
+    targetId: string
+    title: string
+    url: string
+    index?: number
+  }
+  | { targetId: any; url: string; title: string; active: boolean; reused: boolean }
+> {
   const tabs = await listTabs({ includeChrome: false })
   const match = options.match || 'exact'
   const existing = tabs.find(tab => tabMatchesUrl(tab.url, url, match))
@@ -222,10 +239,10 @@ export async function openOrReuseTab(
 
 /**
  * Close a browser tab by target id, tab object, or the current tab when omitted.
- * @param {string|{targetId:string}} [target] Target id or tab-like object. Defaults to the current tab.
- * @returns {Promise<string>} Closed target id.
+ * @param target - target id or tab-like object; defaults to the current tab.
+ * @returns the closed target id, with its session and preferred-target state dropped.
  */
-export async function closeTab(target: TabTarget | undefined = undefined) {
+export async function closeTab(target: TabTarget | undefined = undefined): Promise<string> {
   const targetId =
     target === undefined
       ? (await currentTab()).targetId
@@ -245,9 +262,10 @@ export async function closeTab(target: TabTarget | undefined = undefined) {
 
 /**
  * Ensure the active harness session points at a real, non-internal page tab.
- * @returns {Promise<{targetId:string,title:string,url:string}|null>}
+ * @returns the current tab when it is a real page, otherwise the first
+ *   non-internal tab; null when the browser has none.
  */
-export async function ensureRealTab() {
+export async function ensureRealTab(): Promise<{ targetId: string; url: string; title: string } | null | undefined> {
   const tabs = await listTabs({ includeChrome: false })
   if (tabs.length === 0) {
     return null
@@ -265,10 +283,10 @@ export async function ensureRealTab() {
 
 /**
  * Find an iframe target whose URL contains a substring.
- * @param {string} urlSubstring URL substring to match.
- * @returns {Promise<string|null>} Matching iframe target id, if any.
+ * @param urlSubstring - URL substring to match.
+ * @returns the matching iframe target id, or null when none matches.
  */
-export async function iframeTarget(urlSubstring) {
+export async function iframeTarget(urlSubstring): Promise<any> {
   const targets = (await cdp('Target.getTargets')).targetInfos || []
   return (
     targets.find(

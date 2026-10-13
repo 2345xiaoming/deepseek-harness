@@ -3,11 +3,12 @@ import { js } from './cdp-eval.ts'
 
 /**
  * Fetch text from Node with a browser-like User-Agent.
- * @param {string} url URL to fetch.
- * @param {{headers?: Record<string,string>, timeout?: number, method?: string, body?: any}} [options]
- * @returns {Promise<string>} Response body text.
+ *
+ * @param url - URL to fetch.
+ * @param options - request overrides: headers, timeout in seconds (default 20), method, and body.
+ * @returns the response body text; a non-2xx status throws.
  */
-export async function serverFetch(url, options: any = {}) {
+export async function serverFetch(url, options: any = {}): Promise<string> {
   const { timeout = 20.0, headers = {}, ...fetchOptions } = options
   const response = await fetch(url, {
     ...fetchOptions,
@@ -24,11 +25,12 @@ export async function serverFetch(url, options: any = {}) {
 
 /**
  * Fetch text in the current browser page context.
- * @param {string} url URL to fetch. Relative URLs resolve against the current page.
- * @param {{headers?: Record<string,string>, timeout?: number, method?: string, body?: any}} [options]
- * @returns {Promise<string>} Response body text.
+ *
+ * @param url - URL to fetch; relative URLs resolve against the current page.
+ * @param options - request overrides: headers, timeout in seconds (default 20), method, and body.
+ * @returns the response body text; a non-2xx status throws.
  */
-export async function browserFetch(url, options: any = {}) {
+export async function browserFetch(url, options: any = {}): Promise<any> {
   const { timeout = 20.0, ...fetchOptions } = options
   const payload = JSON.stringify({ url, options: fetchOptions, timeout })
   return js(`(async () => {

@@ -81,10 +81,9 @@ export { browserFetch, serverFetch } from './http.ts'
 /**
  * List Agent-owned and user-owned spaces exposed by Ego Lite.
  * Use the numeric id as the stable locator; display names may be duplicated.
- * @returns {Promise<Array<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,
- *   profileId?:string,profileName?:string,recentTabTitles?:string[]}>>}
+ * @returns the known task spaces, each carrying `id`, `taskId`, and `name`.
  */
-export async function listTaskSpaces() {
+export async function listTaskSpaces(): Promise<any> {
   const ego = globalThis.ego
   if (!ego || typeof ego.listTaskSpaces !== 'function') {
     throw new Error('listTaskSpaces requires ego.listTaskSpaces')
@@ -97,9 +96,9 @@ export async function listTaskSpaces() {
 /**
  * List browser profiles that may be selected when creating a task space.
  * Profile ids are stable locators; display names are not guaranteed unique.
- * @returns {Promise<Array<{id:string,name:string,isDefault:boolean}>>}
+ * @returns the selectable profiles, each with `id`, `name`, and `isDefault`.
  */
-export async function profiles() {
+export async function profiles(): Promise<any> {
   const ego = globalThis.ego
   if (!ego || typeof ego.listProfiles !== 'function') {
     throw new Error('profiles requires ego.listProfiles')
@@ -153,10 +152,11 @@ function isAgentOwned(ownership) {
 
 /**
  * Select an existing task space by id/name for the current Node invocation.
- * @param {string|number} nameOrId Task space id or name.
- * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
+ * @param nameOrId - task space id or name.
+ * @returns the selected task space descriptor.
+ * @throws when no space matches, or when the match is not agent-owned.
  */
-export async function switchTaskSpace(nameOrId) {
+export async function switchTaskSpace(nameOrId): Promise<any> {
   const ego = globalThis.ego
   if (!ego || typeof ego.useTaskSpace !== 'function') {
     throw new Error('switchTaskSpace requires ego.useTaskSpace')
@@ -172,11 +172,11 @@ export async function switchTaskSpace(nameOrId) {
 
 /**
  * Create an agent-owned task space and select it for the current Node invocation.
- * @param {string} name Task space name.
- * @param {string} [profileId] Profile id returned by profiles().
- * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
+ * @param name - task space name.
+ * @param profileId - profile id returned by profiles(); omit to let the native bridge pick the default profile.
+ * @returns the created task space descriptor.
  */
-export async function newTaskSpace(name, profileId?: string) {
+export async function newTaskSpace(name, profileId?: string): Promise<any> {
   assertTaskSpaceName('newTaskSpace', name)
   return (await createTaskSpaceResolution(name, profileId)).descriptor
 }
@@ -223,8 +223,8 @@ async function createTaskSpaceResolution(
  * Use an existing agent-owned task space, or create it when missing. User-owned
  * spaces are selected but not claimed (the EGO_TASK_SPACE_USER_IN_CONTROL error
  * surfaces) — call claimTaskSpace(nameOrId) to take ownership.
- * @param {string|number} nameOrId Task space name or numeric id.
- * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
+ * @param nameOrId - task space name or numeric id.
+ * @returns the resolved task space handle.
  */
 export async function useOrCreateTaskSpace(
   nameOrId,
@@ -282,9 +282,10 @@ async function resolveTaskSpace(nameOrId, options: { select?: boolean } = {}) {
 /**
  * Return the v2 object handle for an existing task space, or create the space
  * when a string name does not exist.
- * @param {string|number} nameOrId Task space name or numeric id.
- * @param {{profileId?:string}} [options] Creation options for a new named space.
- * @returns {Promise<import('./page-model.ts').TaskSpace>}
+ * @param nameOrId - task space name or numeric id.
+ * @param options - creation options for a new named space; `profileId` applies only while the name is new.
+ * @returns the resolved task space handle.
+ * @throws when `profileId` is combined with an existing or numeric locator.
  */
 export async function taskSpace(
   nameOrId,
@@ -336,8 +337,8 @@ async function initializeResolvedTaskSpace(resolution) {
  * Claim a user-owned task space (ownership transfers to the agent) and select it
  * for the current Node invocation. Resolves the space by id/name, claims it via
  * ego.claimTaskSpace, then selects it.
- * @param {string|number} nameOrId Task space id or name.
- * @returns {Promise<import('./page-model.ts').TaskSpace>}
+ * @param nameOrId - task space id or name.
+ * @returns the claimed task space handle.
  */
 export async function claimTaskSpace(
   nameOrId,
@@ -391,15 +392,15 @@ async function selectTaskSpaceIfProvided(
  * User-owned spaces: `keep:true` is skipped (the user already has the page) and
  * resolves `{ done: false, skipped: "user-owned" }`; `keep:false` claims the
  * space first, then closes it.
- * @param {string|number} nameOrId Task space id or name.
- * @param {{ keep: boolean }} options Required. `keep:true` hands the page to the user; `keep:false` closes the space.
- * @returns {Promise<{done: boolean, skipped?: "user-owned"}>} `{ done: true }` when the space was completed or closed;
+ * @param nameOrId - task space id or name.
+ * @param options - required; `keep: true` hands the page to the user, `keep: false` closes the space.
+ * @returns `{ done: true }` when the space was completed or closed, or
  *   `{ done: false, skipped: "user-owned" }` when nothing was done.
  */
 export async function completeTaskSpace(
   nameOrId: string | number,
   options: { keep: boolean },
-) {
+): Promise<{ done: boolean; skipped: 'user-owned' } | { done: boolean; skipped?: never }> {
   if (
     (typeof nameOrId !== 'string' && typeof nameOrId !== 'number') ||
     nameOrId === ''
@@ -445,11 +446,12 @@ export async function completeTaskSpace(
  * Hand off a task space back to the user, hiding the agent overlay.
  * User-owned spaces are skipped (the user already controls them) and resolve
  * `{ done: false, skipped: "user-owned" }`.
- * @param {string|number} [nameOrId] Task space id or name. If provided, switches to that space first.
- * @returns {Promise<{done: boolean, skipped?: "user-owned"}>} `{ done: true }` when control was handed off;
- *   `{ done: false, skipped: "user-owned" }` when nothing was done.
+ * @param nameOrId - task space id or name; when provided, switches to that space first.
+ * @returns `{ done: true }` when control was handed off, `{ done: false, skipped: "user-owned" }` when nothing was done.
  */
-export async function handOffTaskSpace(nameOrId?: string | number) {
+export async function handOffTaskSpace(
+  nameOrId?: string | number,
+): Promise<{ done: boolean; skipped: 'user-owned' } | { done: boolean; skipped?: never }> {
   const ego = globalThis.ego
   if (!ego || typeof ego.handOffTaskSpace !== 'function') {
     throw new Error('handOffTaskSpace requires ego.handOffTaskSpace')
@@ -467,9 +469,8 @@ export async function handOffTaskSpace(nameOrId?: string | number) {
 
 /**
  * Take over a task space, showing the agent overlay to indicate work has resumed.
- * @param {string|number} [nameOrId] Task space id or name. If provided, switches to that space first.
- * @returns {Promise<import('./page-model.ts').TaskSpace|void>} A TaskSpace when a name or id is provided;
- *   otherwise preserves the selected-space form's void result.
+ * @param nameOrId - task space id or name; when provided, switches to that space first.
+ * @returns the controlled task space handle, or undefined when no name or id was given.
  */
 export async function takeOverTaskSpace(
   nameOrId?: string | number,
@@ -515,14 +516,15 @@ async function probeCurrentAgentControl() {
  * Block until the agent regains control of the named task space.
  * Polls a harmless probe until it succeeds, or throws when the timeout
  * elapses. Read-only — does not call takeOverTaskSpace.
- * @param {string|number} nameOrId Task space id or name.
- * @param {{ interval?: number, timeout?: number }} [options] interval & timeout in seconds (default 20s / 600s).
- * @returns {Promise<void>}
+ * @param nameOrId - task space id or name.
+ * @param options - `interval` and `timeout` in seconds; defaults are 20 and 600.
+ * @returns once the probe reports agent control.
+ * @throws when the timeout elapses first.
  */
 export async function waitForAgentControl(
   nameOrId: string | number,
   options: { interval?: number; timeout?: number } = {},
-) {
+): Promise<void> {
   if (
     (typeof nameOrId !== 'string' && typeof nameOrId !== 'number') ||
     nameOrId === ''
@@ -624,7 +626,14 @@ function findMatchingTaskSpace(spaces, nameOrId) {
   return undefined
 }
 
-export async function siteSkillsForUrl(url) {
+/**
+ * Match learned site skills against one URL for the current agent workspace.
+ * @param url - page URL to match site skills against.
+ * @returns the learned entries whose domain pattern matches that URL.
+ */
+export async function siteSkillsForUrl(
+  url,
+): Promise<import('./learning/check-domain-learning.ts').LearningEntry[]> {
   return siteSkillsForUrlCore(url, {
     agentWorkspace: state.agentWorkspace(),
   })
@@ -632,22 +641,28 @@ export async function siteSkillsForUrl(url) {
 
 /**
  * Return site skills matching a URL, or the current page URL when omitted.
- * @param {string} [url] URL to inspect for site skills.
- * @returns {Promise<Array<object|string>>}
+ * @param url - URL to inspect for site skills; defaults to the current page URL.
+ * @returns the learned entries whose domain pattern matches that URL.
  */
-export async function siteSkills(url = undefined) {
+export async function siteSkills(
+  url = undefined,
+): Promise<import('./learning/check-domain-learning.ts').LearningEntry[]> {
   const targetUrl = url ?? (await nav.pageInfo()).url ?? ''
   return siteSkillsForUrl(targetUrl)
 }
 
 /**
  * Run a learned Node site tool with the helper context.
- * @param {string} siteId Site identifier.
- * @param {string} toolName Tool name within the site.
- * @param {object} [args] Tool arguments.
- * @returns {Promise<any>} Tool result.
+ * @param siteId - site identifier.
+ * @param toolName - tool name within the site.
+ * @param args - tool arguments; defaults to none.
+ * @returns the value the site tool resolves to.
  */
-export async function runSiteTool(siteId, toolName, args: any = {}) {
+export async function runSiteTool(
+  siteId,
+  toolName,
+  args: any = {},
+): Promise<any> {
   return runNodeSiteTool(siteId, toolName, args, helperContext(), {
     agentWorkspace: state.agentWorkspace(),
   })
@@ -655,12 +670,16 @@ export async function runSiteTool(siteId, toolName, args: any = {}) {
 
 /**
  * Run a learned browser-side site tool in the current page.
- * @param {string} siteId Site identifier.
- * @param {string} toolName Tool name within the site.
- * @param {object} [args] Tool arguments.
- * @returns {Promise<any>} Browser tool result.
+ * @param siteId - site identifier.
+ * @param toolName - tool name within the site.
+ * @param args - tool arguments; defaults to none.
+ * @returns the browser-side tool's evaluated result.
  */
-export async function runSiteBrowserTool(siteId, toolName, args: any = {}) {
+export async function runSiteBrowserTool(
+  siteId,
+  toolName,
+  args: any = {},
+): Promise<any> {
   const source = await loadBrowserToolSource(siteId, toolName, {
     agentWorkspace: state.agentWorkspace(),
   })
@@ -670,22 +689,31 @@ export async function runSiteBrowserTool(siteId, toolName, args: any = {}) {
 /**
  * Load learned context for the current page or a given URL.
  * Returns accumulated site knowledge: notes content, available tools, usage examples.
- * @param {string} [url] URL to inspect. Defaults to current page.
- * @returns {Promise<object>} Learned context with knowledge and tool signatures.
+ * @param url - URL to inspect; defaults to the current page URL.
+ * @returns the learned notes and tool signatures for that URL's site.
  */
-export async function learnContext(url = undefined) {
+export async function learnContext(
+  url = undefined,
+): Promise<import('./learning/check-domain-learning.ts').LearnedContext> {
   const targetUrl = url ?? (await nav.pageInfo()).url ?? ''
   return loadLearnedContext(targetUrl, {
     agentWorkspace: state.agentWorkspace(),
   })
 }
 
+/**
+ * Build the flat helper surface exposed to ego-browser scripts and CLI rounds.
+ * Entries in `extra` win over the built-ins; `printHelp` receives the text
+ * `help()` formats instead of letting the default sink write it.
+ * @param extra - additional helpers merged last, so they override built-ins.
+ * @param options - `printHelp` sink for `help()` output; defaults to writing through the CLI buffer.
+ * @returns every helper by name, plus `egoBrowser` (stale-conversation guard) and `help`.
+ */
 export function helperContext(
   extra: any = {},
-  {
-    printHelp = (text: string) => bufferOutput(`${text}\n`),
-  }: { printHelp?: (text: string) => void } = {},
-) {
+  options: { printHelp?: (text: string) => void } = {},
+): any {
+  const { printHelp = (text: string) => bufferOutput(`${text}\n`) } = options
   const { newTab: _newTab, ...publicNav } = nav
   const all = {
     ...pointer,
@@ -737,7 +765,12 @@ export function helperContext(
   }
 }
 
-export async function loadAgentHelpers() {
+/**
+ * Load the workspace's `agent_helpers.js` as extra helper bindings. Each call
+ * re-imports the file so edits take effect within one process.
+ * @returns the module's non-underscore exports keyed by name, or an empty object when the file is absent.
+ */
+export async function loadAgentHelpers(): Promise<Record<string, any>> {
   const path = join(state.agentWorkspace(), 'agent_helpers.js')
   if (!existsSync(path)) {
     return {}
@@ -752,4 +785,5 @@ export async function loadAgentHelpers() {
   return out
 }
 
+/** Overrides setter and unserializable-value decoder, exposed for tests. */
 export const __testing = { setOverrides, decodeUnserializableJsValue }

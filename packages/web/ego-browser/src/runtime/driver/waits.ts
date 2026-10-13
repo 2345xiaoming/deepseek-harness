@@ -27,32 +27,34 @@ type WaitForNetworkIdleOptions = {
 
 /**
  * Sleep for a fixed number of seconds.
- * @param {number} [seconds=1.0] Seconds to wait.
- * @returns {Promise<void>}
+ * @param seconds - seconds to wait; defaults to 1.
+ * @returns resolves after the delay.
  */
-export async function wait(seconds = 1.0) {
+export async function wait(seconds = 1.0): Promise<void> {
   await state.sleep(seconds * 1000)
 }
 
 /**
  * Wait until document.readyState is complete.
- * @param {{timeout?: number}} [options]
- * @returns {Promise<boolean>} True when loaded before timeout.
+ * @param options - wait budget forwarded to the document-load wait; defaults to 15 seconds.
+ * @returns true when the document loaded before the timeout, false otherwise.
  */
-export async function waitForLoad(options: WaitForLoadOptions = {}) {
+export async function waitForLoad(options: WaitForLoadOptions = {}): Promise<boolean> {
   return waitForDocumentLoad(options)
 }
 
 /**
- * Wait until an element exists, optionally requiring visibility.
- * @param {string} selector CSS selector / @ref / loc= / xpath= to poll.
- * @param {{timeout?: number, visible?: boolean}} [options]
- * @returns {Promise<boolean>} True when found before timeout.
+ * Wait until an element exists, optionally requiring visibility. Transient
+ * resolution failures keep polling; permanent ones (bad selector, ambiguous
+ * match) propagate.
+ * @param selector - CSS selector / @ref / loc= / xpath= to poll.
+ * @param options - timeout budget and whether visibility is required; defaults to 10 seconds and existence only.
+ * @returns true when the element was found before the timeout, false otherwise.
  */
 export async function waitForElement(
   selector: string,
   options: WaitForElementOptions = {},
-) {
+): Promise<boolean> {
   const timeout = options.timeout ?? 10.0
   const visible = options.visible ?? false
   const deadline = state.now() + timeout * 1000
@@ -97,12 +99,12 @@ export async function waitForElement(
  * In the browser runtime this reads the continuous, Page-scoped tracker without
  * consuming public events. Compatibility adapters retain the legacy temporary
  * Network-domain observation and best-effort fallback.
- * @param {{timeout?: number, idleMs?: number}} [options]
- * @returns {Promise<boolean>} True when idle before timeout.
+ * @param options - timeout budget and required quiet window; defaults to 10 seconds and 500 idle milliseconds.
+ * @returns true when the network went idle before the timeout, false otherwise.
  */
 export async function waitForNetworkIdle(
   options: WaitForNetworkIdleOptions = {},
-) {
+): Promise<boolean> {
   const timeout = options.timeout ?? 10.0
   const idleMs = options.idleMs ?? 500
   const deadline = state.now() + timeout * 1000

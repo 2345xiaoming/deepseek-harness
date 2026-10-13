@@ -4,11 +4,12 @@ import { withHandle } from './element-ops.ts'
 
 /**
  * Set files on a file input.
- * @param {string} selector CSS selector / @ref / loc= / xpath= for an input[type=file].
- * @param {string|string[]} path Absolute file path or paths to upload.
- * @returns {Promise<void>}
+ * @param selector - CSS selector / @ref / loc= / xpath= for an input[type=file].
+ * @param path - absolute file path, or an array of paths, to upload.
+ * @returns resolves once the input's file list is replaced; the element handle
+ *   is released even when the CDP call fails.
  */
-export async function uploadFile(selector, path) {
+export async function uploadFile(selector, path): Promise<void> {
   const files = Array.isArray(path) ? path : [path]
   await withHandle(selector, async ({ objectId, sessionId }) => {
     await cdp('DOM.setFileInputFiles', { files, objectId }, sessionId)

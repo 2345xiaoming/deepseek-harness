@@ -25,10 +25,13 @@ const AsyncFunction = (async function () {}).constructor as new (
 export const name = 'ego-browser'
 export const inject = ['tools']
 
+/** Ego-browser plugin configuration. */
 export interface Config {
+  /** Install the CDP bridge and register the `browser_*` tools. Defaults to `true`; `false` leaves the plugin inactive. */
   enabled: boolean
 }
 
+/** Validated ego-browser configuration. */
 export const Config = z.object({
   enabled: z.boolean().default(true),
 })

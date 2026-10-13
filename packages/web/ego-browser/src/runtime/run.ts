@@ -27,6 +27,7 @@ type ReadableLike = {
   on(event: 'error', listener: (error: Error) => void): unknown
 }
 
+/** Injection points for {@link runMain}: argv, stdin text, and output streams. */
 export type RunMainOptions = {
   argv?: string[]
   stdout?: WritableLike
@@ -35,6 +36,7 @@ export type RunMainOptions = {
   stdinText?: string
 }
 
+/** `--help` text describing the CLI and its typical usage. */
 export const HELP = `ego-browser
 
 Read the ego-browser skill for the default workflow and examples.
@@ -50,6 +52,7 @@ Typical usage:
 Helpers are pre-imported and the browser connection is prepared automatically.
 `
 
+/** Text printed when the CLI receives arguments or empty stdin. */
 export const USAGE = `Usage:
   ego-browser <<'JS'
   const task = await taskSpace('demo')
@@ -59,7 +62,13 @@ export const USAGE = `Usage:
   JS
 `
 
-export async function runMain(options: RunMainOptions = {}) {
+/**
+ * Run the ego-browser CLI over a script read from `options.stdinText` or stdin.
+ *
+ * @param options - argv and stream overrides; defaults to the process argv and stdio.
+ * @returns 0 after help or a completed script, 2 when arguments are present or stdin is empty; script failures propagate.
+ */
+export async function runMain(options: RunMainOptions = {}): Promise<0 | 2> {
   const argv = options.argv || process.argv.slice(2)
   const stdout = options.stdout || processStdout
   const stderr = options.stderr || processStderr
@@ -147,7 +156,13 @@ function userScriptSyntaxError(code: string, original: unknown): SyntaxError {
     : new SyntaxError(originalMessage)
 }
 
-export async function executionContext() {
+/**
+ * Build the helper context handed to a user script as lexical parameters, with
+ * `console` and `cliLog` bound to this round's output sink.
+ *
+ * @returns the helper name → value map installed for the round.
+ */
+export async function executionContext(): Promise<Record<string, any>> {
   const agentHelpers = await helpers.loadAgentHelpers()
   // Single source of truth for the agent-facing surface: the same helperContext()
   // that installEgoSdk() exposes in the browser runtime, so the CLI and SDK paths

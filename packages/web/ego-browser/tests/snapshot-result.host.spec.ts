@@ -1,5 +1,5 @@
 /**
- * Snapshot result contracts: ref rewriting and frame-provenance attribution
+ * Snapshot result contracts: ref rewriting and frame-origin attribution
  * must treat quoted accessible names and locator values as opaque text, and
  * locator sanitization must drop only the locators that fail validation while
  * keeping their refs. Assertions ported from upstream ego-lite
@@ -37,8 +37,8 @@ describe('snapshot ref rewriting', () => {
   })
 })
 
-describe('snapshot frame provenance', () => {
-  it('backfills frame provenance for iframe descendants from a unique locator', async () => {
+describe('snapshot frame origin', () => {
+  it('backfills frame origin for iframe descendants from a unique locator', async () => {
     const input = {
       content: [
         'iframe [ref=12]',
@@ -84,10 +84,10 @@ describe('snapshot frame provenance', () => {
     )
 
     expect(result.refs?.[0]?.frameId).toBe('frame-same')
-    expect(result.refs?.[0]?.frameProvenance).toBe('frame')
+    expect(result.refs?.[0]?.frameOrigin).toBe('frame')
   })
 
-  it('ignores ref tokens inside accessible names when attributing frame provenance', async () => {
+  it('ignores ref tokens inside accessible names when attributing frame origin', async () => {
     const input = {
       content: [
         'root',
@@ -114,14 +114,14 @@ describe('snapshot frame provenance', () => {
     )
 
     expect(
-      result.refs?.[0]?.frameProvenance,
+      result.refs?.[0]?.frameOrigin,
       'the page-owned ref must not be re-homed by a quoted ref token',
     ).toBe('page')
-    expect(result.refs?.[1]?.frameProvenance).toBe('frame')
+    expect(result.refs?.[1]?.frameOrigin).toBe('frame')
     expect(result.refs?.[1]?.frameId).toBe('frame-child')
   })
 
-  it('does not invent frame provenance for an ambiguous iframe descendant', async () => {
+  it('does not invent frame origin for an ambiguous iframe descendant', async () => {
     const input = {
       content: [
         'iframe [ref=12]',
@@ -168,7 +168,7 @@ describe('snapshot frame provenance', () => {
     )
 
     expect(result.refs?.[0]?.frameId).toBeUndefined()
-    expect(result.refs?.[0]?.frameProvenance).toBe('unknown')
+    expect(result.refs?.[0]?.frameOrigin).toBe('unknown')
   })
 })
 

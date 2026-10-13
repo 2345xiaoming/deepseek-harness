@@ -17,6 +17,10 @@ type PageRuntimeContext = {
   contextId?: number
 }
 
+/**
+ * One native snapshot locator awaiting validation: `index` is its position in the
+ * caller's list, and `backendNodeId` is the node the snapshot recorded for it.
+ */
 export type LocatorBackendCandidate = {
   index: number
   locator: string
@@ -26,7 +30,9 @@ export type LocatorBackendCandidate = {
 
 let snapshotLocatorBatchSequence = 0
 
+/** Element resolution failure; `kind` tells the caller whether retrying can succeed. */
 export class ElementResolutionError extends Error {
+  /** 'transient' when the same request can succeed later, 'permanent' when the request must change first. */
   kind: 'transient' | 'permanent'
   constructor(message: string, kind: 'transient' | 'permanent') {
     super(message)
@@ -46,20 +52,31 @@ function matchCountKind(message: string): 'transient' | 'permanent' {
   return n > 1 ? 'permanent' : 'transient'
 }
 
+/**
+ * Resolve a ref, locator, or raw selector to the center point of its element.
+ * @param cdp - CDP sender used for every command.
+ * @param sessionId - page target session; iframes are reached through `iframeSessions`.
+ * @param refMap - snapshot ref map consulted when `selectorOrRef` is a ref.
+ * @param selectorOrRef - snapshot ref, locator, or raw CSS/XPath selector.
+ * @param iframeSessions - frame id to session id map for iframe targets.
+ * @returns the element's viewport center point plus the session that owns it.
+ * @throws ElementResolutionError: 'transient' when the element is absent or unrendered,
+ *   'permanent' when the selector is invalid or the ref cannot be used.
+ */
 export async function resolveElementCenter(
   cdp,
   sessionId,
   refMap,
   selectorOrRef,
   iframeSessions = new Map(),
-) {
+): Promise<{ x: number; y: number; sessionId: any }> {
   const refId = parseRef(selectorOrRef)
   if (refId) {
     const entry = refMap.get(refId)
     if (!entry) {
       throw new ElementResolutionError(`Unknown ref: ${refId}`, 'transient')
     }
-    assertRefProvenance(refMap, entry, refId)
+    assertRefFrameOrigin(refMap, entry, refId)
     const effectiveSessionId = resolveFrameSession(
       entry.frameId,
       sessionId,
@@ -137,6 +154,20 @@ export async function resolveElementCenter(
   )
 }
 
+/**
+ * Resolve a ref, locator, or raw selector to a live DOM object handle.
+ * @param cdp - CDP sender used for every command.
+ * @param sessionId - page target session; iframes are reached through `iframeSessions`.
+ * @param refMap - snapshot ref map consulted when `selectorOrRef` is a ref.
+ * @param selectorOrRef - snapshot ref, locator, or raw CSS/XPath selector.
+ * @param iframeSessions - frame id to session id map for iframe targets.
+ * @param options - `strict` requires one raw-selector match in the main document,
+ *   `strictGlobal` counts locator matches across frames, and `actionability` keeps only
+ *   targets that accept the requested input.
+ * @returns the object handle, the session that owns it, and the frame id when the element lives in a frame.
+ * @throws ElementResolutionError: 'transient' when the element is absent, 'permanent'
+ *   when the selector is invalid or ambiguous, or the ref cannot be used.
+ */
 export async function resolveElementObjectId(
   cdp,
   sessionId,
@@ -155,8 +186,8 @@ export async function resolveElementObjectId(
     if (!entry) {
       throw new ElementResolutionError(`Unknown ref: ${refId}`, 'transient')
     }
-    assertRefProvenance(refMap, entry, refId)
-    if (entry.frameProvenance === 'unknown') {
+    assertRefFrameOrigin(refMap, entry, refId)
+    if (entry.frameOrigin === 'unknown') {
       return resolveRefObjectIdWithRecoveredFrame(
         cdp,
         sessionId,
@@ -285,10 +316,10 @@ function exactRefError(error: unknown, refId: string): unknown {
     : error
 }
 
-function assertRefProvenance(refMap, entry, refId: string): void {
-  if (refMap.allowFallback === false && entry.frameProvenance === 'unknown') {
+function assertRefFrameOrigin(refMap, entry, refId: string): void {
+  if (refMap.allowFallback === false && entry.frameOrigin === 'unknown') {
     throw new ElementResolutionError(
-      `Ref @${refId} has unknown frame provenance; take a new snapshot or use a locator`,
+      `Ref @${refId} has unknown frame origin; take a new snapshot or use a locator`,
       'permanent',
     )
   }
@@ -303,7 +334,7 @@ async function resolveRefObjectIdWithRecoveredFrame(
 ): Promise<{ objectId: string; sessionId: string; frameId?: string }> {
   const allContexts = pageContexts(sessionId, iframeSessions)
   const frameContexts = allContexts.slice(1)
-  // Unknown provenance means the snapshot placed this ref under an iframe, so
+  // An unknown frame origin means the snapshot placed this ref under an iframe, so
   // frames are searched first. The main document remains a fallback in case
   // the snapshot text misattributed a page-owned node to a frame.
   let matches = await collectBackendNodeMatches(
@@ -332,7 +363,7 @@ async function resolveRefObjectIdWithRecoveredFrame(
       match = semanticMatches[0]
     } else {
       throw new ElementResolutionError(
-        `Ref @${refId} matched ${matches.size} frame contexts because its frame provenance is missing`,
+        `Ref @${refId} matched ${matches.size} frame contexts because its frame origin is missing`,
         'permanent',
       )
     }
@@ -426,6 +457,11 @@ async function collectBackendNodeMatches(
  * Validate many native snapshot locators together. DOM locator counts are
  * queried once per execution context, matching nodes are described in
  * parallel, and one object group releases every temporary handle.
+ * @param cdp - CDP sender used for every command.
+ * @param sessionId - page target session; iframes are reached through `iframeSessions`.
+ * @param iframeSessions - frame id to session id map for iframe targets.
+ * @param candidates - native snapshot locators to validate.
+ * @returns the `index` values whose locator still resolves to the recorded backend node.
  */
 export async function validateLocatorBackendNodes(
   cdp,
@@ -1297,7 +1333,7 @@ async function findUniqueRoleMatch(
 
   const rawMainMatches = await matchesIn(contexts.slice(0, 1))
   let cachedFrameMatches
-  const matchesWithFrameProvenance = async () => {
+  const matchesWithFrameOrigin = async () => {
     cachedFrameMatches ||= matchesIn(contexts.slice(1))
     const frames = await cachedFrameMatches
     const framedNodeKeys = new Set(
@@ -1312,7 +1348,7 @@ async function findUniqueRoleMatch(
     return { main, frames }
   }
   if (strictGlobal) {
-    const { main, frames } = await matchesWithFrameProvenance()
+    const { main, frames } = await matchesWithFrameOrigin()
     const matches = [...main, ...frames]
     if (matches.length === 0) {
       throw new ElementResolutionError(
@@ -1328,7 +1364,7 @@ async function findUniqueRoleMatch(
     const matches =
       rawMainMatches.length > 0
         ? rawMainMatches
-        : (await matchesWithFrameProvenance()).frames
+        : (await matchesWithFrameOrigin()).frames
     if (matches.length === 0) {
       throw new ElementResolutionError(
         `Locator ${raw} matched 0 elements`,
@@ -1349,8 +1385,8 @@ async function findUniqueRoleMatch(
     }
     return { actionable, blocker }
   }
-  const provenance = await matchesWithFrameProvenance()
-  const mainMatches = provenance.main
+  const matchesByContext = await matchesWithFrameOrigin()
+  const mainMatches = matchesByContext.main
   const main = await classify(mainMatches)
   if (main.actionable.length === 1) return main.actionable[0]
   if (main.actionable.length > 1) {
@@ -1359,7 +1395,7 @@ async function findUniqueRoleMatch(
     )
   }
 
-  const frames = provenance.frames
+  const frames = matchesByContext.frames
   const frame = await classify(frames)
   const total = mainMatches.length + frames.length
   if (total === 0) {

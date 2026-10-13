@@ -13,6 +13,11 @@ export const COMPOSED_PARENT_HELPER = `
   }
 `
 
+/**
+ * Browser-side helper source for composed-tree traversal: composed parents,
+ * slot assignment, nearest composed ancestor, and descendant matching that
+ * crosses shadow roots. Callers supply the predicate.
+ */
 export const COMPOSED_TREE_HELPERS = `
   ${COMPOSED_PARENT_HELPER}
   function composedChildren(element) {
@@ -304,9 +309,12 @@ export const EDIT_ACTION_TARGET_HELPERS = `
   }
 `
 
-// Shared by resolver-level candidate selection and the final pointer check.
-// Keeping one composed-tree definition prevents the two stages from disagreeing
-// about shadow descendants, interactive ancestors, or modal blockers.
+/**
+ * Browser-side helper source for hit-target checks, shared by resolver-level
+ * candidate selection and the final pointer check. One definition keeps both
+ * stages agreeing about shadow descendants, interactive ancestors, and modal
+ * blockers.
+ */
 export const HIT_TARGET_HELPERS = `
   ${ACTION_TARGET_STATE_HELPERS}
   ${SCROLL_TARGET_FUNCTIONS}

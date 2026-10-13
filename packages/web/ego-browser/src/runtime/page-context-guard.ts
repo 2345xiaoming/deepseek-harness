@@ -20,7 +20,12 @@ function pageContextHint(globalName: string): string {
   )
 }
 
-/** Add one actionable hint to the common Node-versus-Page context mistake. */
+/**
+ * Add one actionable hint to the common Node-versus-Page context mistake:
+ * mutates the error's message and first stack line in place.
+ * @param error - Caught value, enriched only for a ReferenceError naming a Page-only global that carries no hint yet.
+ * @returns the same value, so callers can `throw addPageContextHint(error)`.
+ */
 export function addPageContextHint(error: unknown): unknown {
   if (!(error instanceof ReferenceError)) return error
   const match = /^([a-z_$][\w$]*) is not defined\.?$/i.exec(
@@ -42,6 +47,9 @@ export function addPageContextHint(error: unknown): unknown {
 /**
  * Install an SDK-only guard so the embedding host can print the same hint even
  * though it, rather than ego-browser's CLI wrapper, executes the heredoc.
+ * Defines a throwing getter for each Page-only global the target does not
+ * already own; `window` is skipped so `typeof window` stays undefined.
+ * @param target - Global object receiving the guard properties.
  */
 export function installPageContextGuard(target: Record<string, unknown>): void {
   for (const globalName of PAGE_ONLY_GLOBALS) {

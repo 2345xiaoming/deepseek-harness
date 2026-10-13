@@ -8,10 +8,11 @@ import { resolveElementObjectId } from '../element-resolver.ts'
  * Accepts @ref / ref=N, loc=css:/loc=role:/loc=href:, text=, xpath=, and raw
  * CSS — the same surface as the pointer/observe helpers, via the unified resolver.
  * Refreshes the RefMap on demand when the input is a ref and the map is empty.
- * @param {string} selectorOrRef Selector or ref string.
- * @returns {Promise<{objectId: string, sessionId?: string}>}
+ * @param selectorOrRef - selector or ref string.
+ * @returns the remote object handle and the session that owns it; the caller
+ *   must release it with releaseHandle.
  */
-export async function resolveHandle(selectorOrRef) {
+export async function resolveHandle(selectorOrRef): Promise<{ objectId: string; sessionId: string; frameId?: string }> {
   await ensureRefMapForRef(selectorOrRef)
   return resolveElementObjectId(
     { sendRaw: cdp },
@@ -22,13 +23,14 @@ export async function resolveHandle(selectorOrRef) {
 }
 
 /**
- * Release a Runtime objectId handle. Best-effort: swallows "already gone"
- * errors (stale handle, lost session, destroyed context).
- * @param {string} objectId Runtime remote object id to release.
- * @param {string} [sessionId] Session that owns the handle.
- * @returns {Promise<void>}
+ * Release a Runtime objectId handle. Best-effort: "already gone" errors
+ * (stale handle, lost session, destroyed context) are swallowed, and a falsy
+ * objectId skips the CDP call entirely.
+ * @param objectId - runtime remote object id to release.
+ * @param sessionId - session that owns the handle.
+ * @returns resolves once the release attempt settles, successful or not.
  */
-export async function releaseHandle(objectId, sessionId) {
+export async function releaseHandle(objectId, sessionId): Promise<void> {
   if (!objectId) return
   try {
     await cdp('Runtime.releaseObject', { objectId }, sessionId)
@@ -38,12 +40,12 @@ export async function releaseHandle(objectId, sessionId) {
 }
 
 /**
- * Resolve a handle, run fn(handle), then release the handle — even if fn throws.
- * @param {string} selectorOrRef Selector or ref string.
- * @param {(handle: {objectId: string, sessionId?: string}) => Promise<any>} fn Callback bound to the resolved handle.
- * @returns {Promise<any>} Whatever fn returns.
+ * Resolve a handle, run fn(handle), then release the handle — even when fn throws.
+ * @param selectorOrRef - selector or ref string.
+ * @param fn - callback bound to the resolved handle.
+ * @returns whatever fn returns.
  */
-export async function withHandle(selectorOrRef, fn) {
+export async function withHandle(selectorOrRef, fn): Promise<any> {
   const handle = await resolveHandle(selectorOrRef)
   try {
     return await fn(handle)
@@ -56,16 +58,16 @@ export async function withHandle(selectorOrRef, fn) {
  * Resolve an element and call a function on it via Runtime.callFunctionOn,
  * with the element bound as `this`. The resolved handle is released afterward;
  * the returned objectId is already freed and must not be reused.
- * @param {string} selectorOrRef Selector or ref string.
- * @param {string} functionDeclaration Function source whose `this` is the element.
- * @param {Array<unknown>} [args=[]] Arguments passed by value.
- * @returns {Promise<{result: any, objectId: string, sessionId?: string}>}
+ * @param selectorOrRef - selector or ref string.
+ * @param functionDeclaration - function source whose `this` is the element.
+ * @param args - arguments passed by value; defaults to none.
+ * @returns the CDP call result plus the identity of the released handle.
  */
 export async function resolveAndCall(
   selectorOrRef,
   functionDeclaration,
   args = [],
-) {
+): Promise<any> {
   return withHandle(selectorOrRef, async ({ objectId, sessionId }) => {
     const result = await cdp(
       'Runtime.callFunctionOn',

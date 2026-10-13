@@ -19,6 +19,11 @@ type DownloadServices = {
 
 type DownloadCompletion = { path: string; failure: null } | { failure: string }
 
+/**
+ * One download observed on a Page session. `finished` settles with the
+ * completion metadata; the methods read that metadata, copy the file, cancel
+ * the download, or remove the temporary artifact directory.
+ */
 export type DownloadArtifact = {
   readonly url: string
   readonly suggestedFilename: string
@@ -30,6 +35,11 @@ export type DownloadArtifact = {
   delete(): Promise<void>
 }
 
+/**
+ * Armed download waiter for one Page target: `ready` configures the session for
+ * its next download, `event` resolves with the observed artifact, and `dispose`
+ * abandons the wait and removes its temporary directory.
+ */
 export type DownloadInterception = {
   ready(sessionId: string): Promise<void>
   event: Promise<DownloadArtifact>
@@ -43,12 +53,17 @@ const activeDownloadTargets = new Set<string>()
 /**
  * Arm one Page session for its next download without changing the shared
  * Chromium BrowserContext download behavior.
+ * @param services - CDP and page-event hooks for the target session.
+ * @param targetId - page target expected to receive the download.
+ * @param options - how long to wait for a download to start, in milliseconds.
+ * @returns the armed interception; only one may be active per target.
  */
 export function preparePageDownload(
   services: DownloadServices,
   targetId: string,
-  { timeoutMs }: { timeoutMs: number },
+  options: { timeoutMs: number },
 ): DownloadInterception {
+  const { timeoutMs } = options
   if (activeDownloadTargets.has(targetId)) {
     throw new Error(`${targetId} is already waiting for a download`)
   }

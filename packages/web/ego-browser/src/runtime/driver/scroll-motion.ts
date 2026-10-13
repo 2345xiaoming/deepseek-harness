@@ -21,6 +21,8 @@ const STEP_INTERVAL_MS = 8
  * Dispatch one logical wheel action as a short eased browser-input motion.
  * Small deltas stay immediate, while page-sized deltas are spread over enough
  * input frames to remain visually continuous without creating a long gesture.
+ * @param services - CDP dispatch and sleep hooks owned by the caller.
+ * @param motion - viewport position, deltas, and optional modifiers for the wheel action.
  */
 export async function dispatchWheelMotion(
   services: WheelMotionServices,

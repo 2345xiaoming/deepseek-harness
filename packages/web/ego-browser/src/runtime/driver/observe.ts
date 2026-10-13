@@ -21,10 +21,15 @@ import {
   registerSnapshotForRefRefresh,
 } from '../ref-state.ts'
 
+/** Options for one Page snapshot. */
 export type SnapshotOptions = {
+  /** Region to capture: the visible viewport, the full Page, or one subtree. */
   scope?: 'only_within_viewport' | 'full_page' | 'subtree'
+  /** Subtree root node; used with `scope: 'subtree'`. */
   root?: number
+  /** Attach action marks to returned snapshot nodes. */
   includeActionMarks?: boolean
+  /** Attach each ref's stable locator to the returned content. */
   includeStableLocator?: boolean
 }
 
@@ -36,21 +41,38 @@ type ScreenshotClip = {
   scale?: number
 }
 
+/** Declarative screenshot scale; `'css'` sizes the output in CSS pixels. */
 export type ScreenshotScale = 'css'
 
+/** Options for one screenshot capture. */
 export type CaptureScreenshotOptions = {
+  /** Capture the whole scrollable document instead of the visible region. */
   full?: boolean
+  /** Legacy escape hatch that passes `clip` through without device-pixel-ratio correction. */
   raw?: boolean
+  /** Region to capture, in CSS pixels unless `raw` is set. */
   clip?: ScreenshotClip
+  /** Scale mode; only `'css'` is accepted. */
   scale?: ScreenshotScale
 }
 
-export async function drainEvents() {
+/**
+ * Drain the CDP events buffered for the current Page session, or for the
+ * preferred target when no browser runtime is active.
+ * @returns the buffered events in arrival order; the buffer is empty afterwards.
+ */
+export async function drainEvents(): Promise<any[]> {
   const sessionId = isBrowserRuntime() ? await ensureSession() : undefined
   return drainBrowserEvents(sessionId)
 }
 
-export async function snapshot(options: SnapshotOptions = {}) {
+/**
+ * Take a Page snapshot, compact its content in place, and replace the current
+ * ref map with the refs it returned.
+ * @param options - snapshot scope and inclusion flags.
+ * @returns the snapshot result, with its content already compacted.
+ */
+export async function snapshot(options: SnapshotOptions = {}): Promise<any> {
   const result: any = await invokeEgo('snapshot', () =>
     browserEgo().snapshot(options),
   )
@@ -61,15 +83,16 @@ export async function snapshot(options: SnapshotOptions = {}) {
 
 registerSnapshotForRefRefresh(() => snapshot())
 
+/** Alias of `snapshot`, kept as the entry point that yields the full snapshot result with its refs. */
 export const snapshotRaw = snapshot
 
 /**
- * Return snapshot content with agent-friendly defaults.
- * @param {{scope?: "only_within_viewport"|"full_page"|"subtree", root?: number, includeActionMarks?: boolean,
- *   includeStableLocator?: boolean}} [options]
- * @returns {Promise<string>}
+ * Return snapshot content with agent-friendly defaults: full page, action marks,
+ * and stable locators included.
+ * @param options - overrides for scope, root, and the inclusion flags.
+ * @returns the snapshot content, or an empty string when it is absent.
  */
-export async function snapshotText(options: SnapshotOptions = {}) {
+export async function snapshotText(options: SnapshotOptions = {}): Promise<any> {
   const result = await snapshot({
     scope: options.scope ?? 'full_page',
     ...(options.root === undefined ? {} : { root: options.root }),
@@ -79,7 +102,13 @@ export async function snapshotText(options: SnapshotOptions = {}) {
   return result.content || ''
 }
 
-export async function elementCenter(selectorOrRef) {
+/**
+ * Resolve the on-screen center of a selector or `@ref`.
+ * @param selectorOrRef - CSS selector, `@ref`, `loc=`, or `xpath=` expression; a ref
+ *   takes one snapshot first when the shared ref map is empty.
+ * @returns the CSS-pixel center plus the session that owns the element.
+ */
+export async function elementCenter(selectorOrRef): Promise<{ x: any; y: any; sessionId: any }> {
   await ensureRefMapForRef(selectorOrRef)
   return resolveElementCenter(
     { sendRaw: cdp },
@@ -94,10 +123,16 @@ export async function elementCenter(selectorOrRef) {
 // other's shots in the shared tmpdir, and successive shots in one run distinct.
 let screenshotSeq = 0
 
+/**
+ * Capture a screenshot through the current Page session and write it to disk.
+ * @param path - output path; omitted writes a unique file under the system temp directory.
+ * @param options - capture region, full-page flag, and scale mode.
+ * @returns the path the PNG was written to.
+ */
 export async function captureScreenshot(
   path?: string,
   options: CaptureScreenshotOptions = {},
-) {
+): Promise<string> {
   assertScreenshotScale(options.scale)
   const sessionId = isBrowserRuntime() ? await ensureSession() : undefined
   return captureScreenshotForSession(path, options, sessionId)
@@ -106,12 +141,16 @@ export async function captureScreenshot(
 /**
  * Capture a screenshot through one explicit target session. Page objects use
  * this entry point so another active tab cannot affect evaluation or capture.
+ * @param path - output path; omitted writes a unique file under the system temp directory.
+ * @param options - capture region, full-page flag, and scale mode.
+ * @param sessionId - target session to evaluate and capture in; omitted uses the current session.
+ * @returns the path the PNG was written to.
  */
 export async function captureScreenshotForSession(
   path?: string,
   options: CaptureScreenshotOptions = {},
   sessionId?: string,
-) {
+): Promise<string> {
   assertScreenshotScale(options.scale)
   const outputPath =
     path ??

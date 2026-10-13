@@ -833,6 +833,23 @@ export interface Config {
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-deepseek-account-platform -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-ego-browser -->
+<a id="deepseek-aidsh-ego-browser"></a>
+
+## `@deepseek-ai/dsh-ego-browser`
+
+- `inject`: `tools`
+- `source`: [`packages/web/ego-browser/src/index.ts:29`](../packages/web/ego-browser/src/index.ts)
+
+```ts config-catalog
+/** Ego-browser plugin configuration. */
+export interface Config {
+  /** Install the CDP bridge and register the `browser_*` tools. Defaults to `true`; `false` leaves the plugin inactive. */
+  enabled: boolean
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-ego-browser -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-agent-team -->
 <a id="deepseek-aidsh-experimental-agent-team"></a>
 
@@ -3057,7 +3074,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-skill-office`
 
 - `inject`: `skills`
-- `source`: [`packages/skill/skill-office/src/index.ts:16`](../packages/skill/skill-office/src/index.ts)
+- `source`: [`packages/skill/skill-office/src/index.ts:19`](../packages/skill/skill-office/src/index.ts)
 
 ```ts config-catalog
 /** Office skill resource location. */

@@ -19,6 +19,10 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+/**
+ * One `/json/list` entry: a debuggable Chrome target with its id, type, title,
+ * URL, and per-target WebSocket URL when Chrome exposes one.
+ */
 export interface PageTarget {
   id: string
   type: string
@@ -35,6 +39,10 @@ const CHROME_BIN_CANDIDATES = [
   'chromium-browser',
 ].filter(Boolean) as string[]
 
+/**
+ * Launch overrides for {@link launchChrome}: every field falls back to a
+ * detected binary, a random port, or no extra arguments.
+ */
 export interface ChromeLaunchOptions {
   /** Override the browser binary; falls back to PATH + common names otherwise. */
   chromeBin?: string
@@ -94,6 +102,9 @@ async function waitForDevToolsPort(profileDir: string, timeoutMs = 6000): Promis
 /**
  * Spawn a fresh headless Chrome with a throwaway profile and return its DevTools port.
  * The caller owns teardown via {@link disposeChrome}. Bounded by {timeoutMs}.
+ *
+ * @param options - binary, port, and extra-argument overrides.
+ * @returns the running instance; a missing DevToolsActivePort kills the child, removes the profile, and throws.
  */
 export async function launchChrome(options: ChromeLaunchOptions = {}): Promise<ChromeInstance> {
   const bin = resolveChromeBin(options.chromeBin)
@@ -129,14 +140,24 @@ export async function launchChrome(options: ChromeLaunchOptions = {}): Promise<C
   return { process: proc, profileDir, port: resolvedPort, wsUrl: null, dead: false }
 }
 
-/** Control-plane endpoint helper: GET /json/version (used to find the browser WS URL). */
+/**
+ * Control-plane endpoint helper: GET /json/version (used to find the browser WS URL).
+ *
+ * @param instance - running Chrome whose port answers the request.
+ * @returns the parsed `/json/version` body; a non-2xx status throws.
+ */
 export async function jsonVersion(instance: ChromeInstance): Promise<{ webSocketDebuggerUrl?: string }> {
   const res = await fetch(`http://127.0.0.1:${instance.port}/json/version`)
   if (!res.ok) throw new Error(`dsh-ego-browser: /json/version HTTP ${res.status}`)
   return (await res.json()) as Record<string, unknown>
 }
 
-/** Control-plane endpoint helper: GET /json/list → page targets (used by ego.listTabs). */
+/**
+ * Control-plane endpoint helper: GET /json/list → page targets (used by ego.listTabs).
+ *
+ * @param instance - running Chrome whose port answers the request.
+ * @returns the parsed target list; a non-2xx status throws.
+ */
 export async function pageTargets(instance: ChromeInstance): Promise<PageTarget[]> {
   const res = await fetch(`http://127.0.0.1:${instance.port}/json/list`)
   if (!res.ok) throw new Error(`dsh-ego-browser: /json/list HTTP ${res.status}`)
@@ -144,7 +165,11 @@ export async function pageTargets(instance: ChromeInstance): Promise<PageTarget[
   return list
 }
 
-/** Lazily obtain (or restart) the current Chrome instance. */
+/**
+ * Lazily obtain (or restart) the current Chrome instance.
+ *
+ * @returns the shared live instance; a dead one is reclaimed and replaced through one in-flight launch.
+ */
 export async function getChrome(): Promise<ChromeInstance> {
   if (current && !current.dead) return current
   if (current) {
@@ -176,6 +201,8 @@ function reapChrome(previous: ChromeInstance): void {
  * Adopt an externally started instance as the shared one (test seam: a test that
  * launched Chrome itself can hand it to the ws-cdp transport so `sendRaw` talks
  * to the same browser). Any previous shared instance is torn down first.
+ *
+ * @param instance - externally launched Chrome to adopt.
  */
 export function adoptChrome(instance: ChromeInstance): void {
   const previous = current

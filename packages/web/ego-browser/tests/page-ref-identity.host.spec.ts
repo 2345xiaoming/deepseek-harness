@@ -90,16 +90,16 @@ describe('page ref identity', () => {
     expect(registry.isInvalidated('page', '1')).toBe(true)
     expect(registry.isInvalidated('page', '2')).toBe(true)
 
-    // A known frame keys on its document; unknown frame provenance keys on
+    // A known frame keys on its document; an unknown frame origin keys on
     // the whole document set so any document change invalidates the ref.
     const documents = new Map([['frame', 'doc-1'], ['other', 'doc-2']])
     expect(
-      pageRefDocumentId({ frameId: 'frame', frameProvenance: 'page' }, documents),
+      pageRefDocumentId({ frameId: 'frame', frameOrigin: 'page' }, documents),
     ).toBe('doc-1')
     const shifted = new Map([['frame', 'doc-1'], ['other', 'doc-3']])
     expect(
-      pageRefDocumentId({ frameProvenance: 'unknown' }, shifted),
-    ).not.toBe(pageRefDocumentId({ frameProvenance: 'unknown' }, documents))
+      pageRefDocumentId({ frameOrigin: 'unknown' }, shifted),
+    ).not.toBe(pageRefDocumentId({ frameOrigin: 'unknown' }, documents))
   })
 
   it('rejects corrupt persisted ref states instead of reconstructing native ids', () => {

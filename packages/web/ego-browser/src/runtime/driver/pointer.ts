@@ -10,6 +10,17 @@ type Point = {
   y: number
   sessionId?: string
 }
+
+/**
+ * Mouse target accepted by mouse helpers.
+ *
+ * Forms:
+ * - string: CSS selector or @ref, resolves to the element center.
+ * - [x, y]: viewport coordinates in CSS pixels.
+ * - {x, y}: viewport coordinates in CSS pixels.
+ * - {selector}: CSS selector or @ref, resolves to the element center.
+ * - {selector, x, y}: element top-left plus x/y offset in CSS pixels.
+ */
 export type MouseTarget =
   | string
   | [number, number]
@@ -67,25 +78,13 @@ const INPUT_EVENT_DELAY_MS = 25
 const INPUT_DISPATCH_TIMEOUT_MS = 1000
 
 /**
- * Mouse target accepted by mouse helpers.
- *
- * Forms:
- * - string: CSS selector or @ref, resolves to the element center.
- * - [x, y]: viewport coordinates in CSS pixels.
- * - {x, y}: viewport coordinates in CSS pixels.
- * - {selector}: CSS selector or @ref, resolves to the element center.
- * - {selector, x, y}: element top-left plus x/y offset in CSS pixels.
- *
- * @typedef {string | [number, number] | {x:number,y:number} | {selector:string,x?:number,y?:number}} MouseTarget
- */
-
-/**
  * Click a mouse target.
- * @param {MouseTarget} target CSS selector, @ref, viewport point, or selector-relative point.
- * @param {{button?: "left"|"middle"|"right", clickCount?: number, clicks?: number, label?: string}} [options]
- * @returns {Promise<void>}
+ * @param target - CSS selector, @ref, viewport point, or selector-relative point.
+ * @param options - button, click count, and highlight label; defaults to one left click.
+ * @returns resolves after the pressed/released pair; a dispatch timeout is
+ *   swallowed only when the click probe still observed the click land.
  */
-export async function click(target: MouseTarget, options: ClickOptions = {}) {
+export async function click(target: MouseTarget, options: ClickOptions = {}): Promise<void> {
   const point = await resolveMouseTarget(target)
   const button = options.button || 'left'
   const buttons = pressedButtons(button)
@@ -120,24 +119,25 @@ export async function click(target: MouseTarget, options: ClickOptions = {}) {
 
 /**
  * Double-click a mouse target.
- * @param {MouseTarget} target CSS selector, @ref, viewport point, or selector-relative point.
- * @param {{button?: "left"|"middle"|"right", label?: string}} [options]
- * @returns {Promise<void>}
+ * @param target - CSS selector, @ref, viewport point, or selector-relative point.
+ * @param options - button and highlight label; the click count is always 2.
+ * @returns resolves after the second click completes.
  */
 export async function doubleClick(
   target: MouseTarget,
   options: ClickOptions = {},
-) {
+): Promise<void> {
   await click(target, { ...options, clickCount: 2 })
 }
 
 /**
  * Move the mouse over a target without pressing a button.
- * @param {MouseTarget} target CSS selector, @ref, viewport point, or selector-relative point.
- * @param {{label?: string}} [options]
- * @returns {Promise<void>}
+ * @param target - CSS selector, @ref, viewport point, or selector-relative point.
+ * @param options - highlight label for the moved-to point.
+ * @returns resolves after the move; a dispatch timeout is swallowed only when
+ *   the hover probe still observed the move land.
  */
-export async function hover(target: MouseTarget, options: HoverOptions = {}) {
+export async function hover(target: MouseTarget, options: HoverOptions = {}): Promise<void> {
   const point = await resolveMouseTarget(target)
   maybeHighlight(point, options.label)
   const probeId = await installHoverProbe(point)
@@ -154,14 +154,16 @@ export async function hover(target: MouseTarget, options: HoverOptions = {}) {
 
 /**
  * Drag the mouse through a sequence of targets while holding a button.
- * @param {MouseTarget[]} points Ordered drag path. Must contain at least two targets.
- * @param {{button?: "left"|"middle"|"right", delayMs?: number, label?: string}} [options]
- * @returns {Promise<void>}
+ * @param points - ordered drag path; must contain at least two targets.
+ * @param options - button, per-step delay, and highlight label.
+ * @returns resolves after the release; a dispatch timeout is swallowed only
+ *   when the mouse-up probe still observed the drag land.
+ * @throws {Error} When fewer than two points are given.
  */
 export async function dragMouse(
   points: MouseTarget[],
   options: DragMouseOptions = {},
-) {
+): Promise<void> {
   if (!Array.isArray(points) || points.length < 2) {
     throw new Error('dragMouse requires at least two points')
   }
@@ -461,16 +463,17 @@ function canProbeInputFallback() {
  * (CDP negates deltas internally when building the Blink wheel event, so the DOM convention
  * applies end to end). Defaults to scrolling down by 300 CSS pixels, matching the downward
  * defaults of scrollBy and scrollToBottomUntil.
- * @param {number|{x?:number,y?:number,dx?:number,dy?:number}} [x=0] Viewport x, or scroll options.
- * @param {number|{dx?: number, dy?: number}} [y=0] Viewport y, or scroll delta options.
- * @param {{dx?: number, dy?: number}} [options] Deltas in CSS pixels; positive dy scrolls down.
- * @returns {Promise<void>}
+ * @param x - viewport x in CSS pixels, or the scroll options object.
+ * @param y - viewport y in CSS pixels, or the scroll delta options object.
+ * @param options - deltas in CSS pixels; positive dy scrolls down, default 300.
+ * @returns the wheel dispatch result, or the DOM scroll fallback's result when
+ *   the target cannot dispatch wheel events at all.
  */
 export async function scroll(
   x: number | ScrollOptions = 0,
   y: number | ScrollOptions = 0,
   options: ScrollOptions = {},
-) {
+): Promise<any> {
   if (x && typeof x === 'object' && !Array.isArray(x)) {
     options = x
     y = options.y ?? 0
@@ -524,15 +527,14 @@ function isWheelDispatchUnsupported(error: unknown) {
 /**
  * Scroll the window with DOM APIs. Positive dy scrolls down, negative dy scrolls up
  * (same sign convention as scroll()).
- * @param {number|{dx?:number,dy?:number,left?:number,top?:number,behavior?: ScrollBehavior}} [amount=900]
- *   Vertical pixels (positive scrolls down), or scroll options.
- * @param {{dx?:number,dy?:number,left?:number,top?:number,behavior?: ScrollBehavior}} [options]
- * @returns {Promise<{x:number,y:number}>} New window scroll position.
+ * @param amount - vertical pixels (positive scrolls down), or the scroll options object.
+ * @param options - explicit scroll offsets, deltas, and behavior.
+ * @returns the window scroll position the browser reports after `window.scrollBy`.
  */
 export async function scrollBy(
   amount: number | ScrollByOptions = 900,
   options: ScrollByOptions = {},
-) {
+): Promise<any> {
   const params = scrollByParams(amount, options)
   return js(`(() => {
     window.scrollBy({
@@ -546,14 +548,14 @@ export async function scrollBy(
 
 /**
  * Scroll downward until a condition is met, the page bottom is reached, or scrolling stalls.
- * @param {Function|string|null} [condition] Function receiving scroll state, or browser JS expression string.
- * @param {{step?:number,dy?:number,maxSteps?:number,wait?:number,waitSeconds?:number,stallLimit?:number}} [options]
- * @returns {Promise<{done:boolean,reason:string,steps:number,state:object}>}
+ * @param condition - function receiving scroll state, or browser JS expression string; null scrolls to the bottom.
+ * @param options - step size, step budget, per-step wait, and stall tolerance.
+ * @returns the stop reason, the steps taken, and the final scroll state.
  */
 export async function scrollToBottomUntil(
   condition: ScrollUntilCondition = null,
   options: ScrollUntilOptions = {},
-) {
+): Promise<{ done: boolean; reason: string; steps: number; state: ScrollState }> {
   const step = numberValue(options.step ?? options.dy ?? 900)
   const maxSteps = Math.max(0, Math.floor(numberValue(options.maxSteps ?? 30)))
   const stallLimit = Math.max(

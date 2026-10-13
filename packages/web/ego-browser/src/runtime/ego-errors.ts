@@ -37,6 +37,7 @@ export const EGO_ERROR_CODES = [
   'EGO_WEB_CONTENTS_UNAVAILABLE',
 ] as const
 
+/** One stable code from EGO_ERROR_CODES. */
 export type EgoErrorCode = (typeof EGO_ERROR_CODES)[number]
 
 /**
@@ -103,7 +104,11 @@ function userPromptGuidance(firstLine: string): string {
   ].join('\n')
 }
 
-/** Type guard for codes this build knows about. */
+/**
+ * Whether a value is one of the codes this build knows about.
+ * @param value - candidate code, usually a binding result's `error_code`.
+ * @returns true when `value` is a member of EGO_ERROR_CODES.
+ */
 export function isEgoErrorCode(value: unknown): value is EgoErrorCode {
   return (
     typeof value === 'string' &&
@@ -114,8 +119,9 @@ export function isEgoErrorCode(value: unknown): value is EgoErrorCode {
 /**
  * Pull the stable error_code out of any ego error shape: resolved
  * `{ error, error_code }` objects, rejected/thrown Errors carrying `.error_code`,
- * or a bare known code string. Returns the raw code (which may be one this build
- * does not know about yet) or undefined when none is present.
+ * or a bare known code string.
+ * @param err - a resolved result, thrown Error, or candidate code string.
+ * @returns the raw code, which may be one this build does not know about yet, or undefined when none is present.
  */
 export function egoErrorCode(err: unknown): string | undefined {
   if (typeof err === 'string') {
@@ -134,7 +140,9 @@ export function egoErrorCode(err: unknown): string | undefined {
  * For a code ego-browser owns wording for, `message` is that owned wording.
  * Otherwise (a code not owned here, or an unknown future code) it falls back to
  * the native error message the binding returned, then the bare code, then a
- * generic string. `code` is the stable classifier and may be undefined.
+ * generic string.
+ * @param err - a resolved result, thrown Error, or candidate code string.
+ * @returns the stable classifier `code` (may be undefined) and the message to surface.
  */
 export function resolveEgoError(err: unknown): {
   code?: string
@@ -163,7 +171,11 @@ function resolveUserControlMessage(err: unknown): string {
   return USER_CONTROL_GUIDANCE
 }
 
-/** Whether an ego error means the task is currently under user control. */
+/**
+ * Whether an ego error means the task is currently under user control.
+ * @param err - a resolved result, thrown Error, or candidate code string.
+ * @returns true when the error's code is EGO_TASK_SPACE_USER_IN_CONTROL.
+ */
 export function isEgoUserControlError(err: unknown): boolean {
   return egoErrorCode(err) === 'EGO_TASK_SPACE_USER_IN_CONTROL'
 }
@@ -172,6 +184,8 @@ export function isEgoUserControlError(err: unknown): boolean {
  * Probe control without turning the expected user-control response into a hard
  * stop. Ego bindings can report failures either by rejecting or by resolving an
  * `{ error, error_code }` object, so both paths must be inspected here.
+ * @param invokeSnapshot - probe call whose rejection and resolved `{ error, error_code }` result are both inspected.
+ * @returns false when the user holds the task space, true when this agent still controls it.
  */
 export async function probeAgentControl(
   invokeSnapshot: () => unknown | Promise<unknown>,
@@ -218,6 +232,9 @@ function isEgoHardStopCode(code: string | undefined): boolean {
  * error shape. `op`, when given, prefixes the message with the failing operation.
  * Shared by invokeEgo and the CDP-send failure path so every ego failure surfaces
  * an identical Error shape.
+ * @param err - a resolved result, thrown Error, or candidate code string.
+ * @param op - failing operation name to prefix the message with, when the caller knows one.
+ * @returns the Error to throw; a hard-stop code also records the run's hard stop, so the guidance survives a caller's own catch.
  */
 export function buildEgoError(
   err: unknown,
@@ -243,6 +260,9 @@ export function buildEgoError(
  * Invoke a native binding and normalize synchronous throws, rejected Promises, and
  * resolved `{ error, error_code }` objects. Control-wait probes intentionally bypass
  * this helper because observing user control is their expected result, not a hard stop.
+ * @param op - failing operation name prefixed to any resulting error message.
+ * @param invoke - the binding call to run.
+ * @returns the binding's resolved value when it carries no `error`.
  */
 export async function invokeEgo<T>(
   op: string,
@@ -281,6 +301,12 @@ function nativeErrorText(err: unknown): string | undefined {
   return undefined
 }
 
+/**
+ * Render any ego error shape as one message: a string as-is, an object's `message`,
+ * or the object's JSON text when it carries no message.
+ * @param err - value to render; a non-object renders as its String form.
+ * @returns the rendered text, falling back to String(err) when JSON serialization fails.
+ */
 export function formatEgoError(err: unknown): string {
   if (err == null) return String(err)
   if (typeof err === 'string') return err

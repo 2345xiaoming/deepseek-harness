@@ -19,7 +19,14 @@ const TOOL_VALUE_TYPES = new Set([
 ])
 const TEMP_REF_RE = /(?:@\d+\b|\bref=\d+\b)/
 
-export async function validateLearning(siteDir: string) {
+/**
+ * Validate one site skill directory: manifest identity, domains, notes, and both
+ * tool maps, including that every declared file exists and holds no temporary
+ * snapshot ref.
+ * @param siteDir - site skill directory to validate.
+ * @returns one message per problem found; an empty list means the skill is valid.
+ */
+export async function validateLearning(siteDir: string): Promise<string[]> {
   const errors: string[] = []
   const siteId = siteDir.split(/[\\/]/).at(-1)
   const manifestPath = join(siteDir, 'manifest.json')
@@ -144,7 +151,12 @@ export async function validateLearning(siteDir: string) {
   return errors
 }
 
-export async function validateLearnings(root = learningsRoot()) {
+/**
+ * Validate every site skill directory under a learnings root.
+ * @param root - learnings root to scan; defaults to the current agent's learnings root.
+ * @returns one message per problem found across all skills; an empty list means all are valid.
+ */
+export async function validateLearnings(root = learningsRoot()): Promise<string[]> {
   const errors: string[] = []
   for (const siteDir of await iterLearningDirs(root)) {
     errors.push(...(await validateLearning(siteDir)))
@@ -152,6 +164,7 @@ export async function validateLearnings(root = learningsRoot()) {
   return errors
 }
 
+/** Validate every installed site skill; alias of validateLearnings. */
 export const validateSiteSkills = validateLearnings
 
 function asStringList(manifest, key, errors: string[], siteId: string) {

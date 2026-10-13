@@ -8,6 +8,7 @@ type SpaceScope = {
   spaceId: number
 }
 
+/** A page target resolved to its task space and attached CDP session. */
 export type PageExecutionContext = SpaceScope & {
   targetId: string
   sessionId: string
@@ -47,6 +48,15 @@ export class NativeOperationGate {
     this.#services = services
   }
 
+  /**
+   * Run an operation with the given task space selected, serialized against
+   * every other gated native operation. A nested call from inside the lease
+   * bypasses the queue and rejects when it asks for a different space.
+   *
+   * @param spaceId - task space to select before the operation runs.
+   * @param operation - work to run under the lease; its rejection does not block later callers.
+   * @returns the operation's result.
+   */
   withSpace<T>(
     spaceId: number,
     operation: (scope: SpaceScope) => T | Promise<T>,
@@ -96,6 +106,13 @@ export class NativeOperationGate {
     return result
   }
 
+  /**
+   * Run an operation under the page's task space with an attached CDP session.
+   *
+   * @param page - task space and target the operation needs.
+   * @param operation - work receiving the resolved session context.
+   * @returns the operation's result.
+   */
   withPage<T>(
     page: PageTarget,
     operation: (context: PageExecutionContext) => T | Promise<T>,
@@ -139,6 +156,13 @@ const defaultGate = new NativeOperationGate({
   ensureSession,
 })
 
+/**
+ * Run an operation under the default gate with the given task space selected.
+ *
+ * @param spaceId - task space to select before the operation runs.
+ * @param operation - work to run under the lease.
+ * @returns the operation's result.
+ */
 export function withSpace<T>(
   spaceId: number,
   operation: (scope: SpaceScope) => T | Promise<T>,
@@ -146,6 +170,13 @@ export function withSpace<T>(
   return defaultGate.withSpace(spaceId, operation)
 }
 
+/**
+ * Run an operation under the default gate with the page's session attached.
+ *
+ * @param page - task space and target the operation needs.
+ * @param operation - work receiving the resolved session context.
+ * @returns the operation's result.
+ */
 export function withPage<T>(
   page: PageTarget,
   operation: (context: PageExecutionContext) => T | Promise<T>,

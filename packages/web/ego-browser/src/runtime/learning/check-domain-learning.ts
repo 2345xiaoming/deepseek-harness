@@ -4,12 +4,14 @@ import { join } from 'node:path'
 
 import { agentWorkspace } from '../env.ts'
 
+/** One declared argument of a site tool, as written in manifest.json. */
 export interface ToolArgSchema {
   type: string
   required: boolean
   description: string
 }
 
+/** A Node or browser site tool declared in a site skill's manifest.json. */
 export interface ToolSchema {
   description: string
   path: string
@@ -17,10 +19,12 @@ export interface ToolSchema {
   returns: { type: string; description: string }
 }
 
+/** A Node site tool, which also names the module export the runner invokes. */
 export interface NodeToolSchema extends ToolSchema {
   callable: string
 }
 
+/** Parsed manifest.json of one site skill directory. */
 export interface LearningManifest {
   id: string
   name: string
@@ -30,6 +34,7 @@ export interface LearningManifest {
   browserTools?: Record<string, ToolSchema>
 }
 
+/** A site skill with its note and tool paths resolved against its directory. */
 export interface LearningEntry {
   id: string
   name: string
@@ -40,6 +45,7 @@ export interface LearningEntry {
   browserTools: Record<string, ToolSchema>
 }
 
+/** Learned context for one URL: whether a skill matched, its identity, notes, and tool signatures. */
 export interface LearnedContext {
   exists: boolean
   siteId: string | null
@@ -49,12 +55,14 @@ export interface LearnedContext {
   tools: LearnedToolSignature[]
 }
 
+/** One note file's text, tagged with the site skill that supplied it. */
 export interface LearnedKnowledgeNote {
   siteId: string
   fileName: string
   content: string
 }
 
+/** One site tool's model-facing signature, with a call example. */
 export interface LearnedToolSignature {
   siteId: string
   toolName: string
@@ -64,16 +72,28 @@ export interface LearnedToolSignature {
   example: string
 }
 
-export function learningsRoot(workspace = agentWorkspace()) {
+/**
+ * Directory holding one subdirectory per learned site skill.
+ * @param workspace - agent workspace root; defaults to the current agent's workspace.
+ * @returns the `learnings` path under `workspace`.
+ */
+export function learningsRoot(workspace = agentWorkspace()): string {
   return join(workspace, 'learnings')
 }
 
+/** Root directory of the installed site skills; alias of learningsRoot. */
 export const siteSkillsRoot = learningsRoot
 
+/**
+ * Check whether any site skill declares a domain matching a URL's hostname.
+ * @param urlOrDomain - page URL or bare hostname to match against manifest domains.
+ * @param options - root override and agent workspace used to locate the learnings root.
+ * @returns whether a skill matched, the parsed hostname, the searched root, and the matching entries.
+ */
 export async function checkDomainLearningExists(
   urlOrDomain: string,
   options: { root?: string; agentWorkspace?: string } = {},
-) {
+): Promise<{ exists: boolean; hostname: string; root: string; matches: LearningEntry[] }> {
   const hostname = urlHostname(urlOrDomain)
   const root =
     options.root || learningsRoot(options.agentWorkspace || agentWorkspace())
@@ -86,10 +106,16 @@ export async function checkDomainLearningExists(
   }
 }
 
+/**
+ * Check whether one site skill directory has a manifest.json.
+ * @param siteId - site skill directory name under the learnings root.
+ * @param options - root override and agent workspace used to locate the learnings root.
+ * @returns whether the manifest exists, plus the resolved root, site directory, and manifest path.
+ */
 export async function checkLearningExists(
   siteId: string,
   options: { root?: string; agentWorkspace?: string } = {},
-) {
+): Promise<{ exists: boolean; root: string; siteDir: string; manifestPath: string }> {
   const root =
     options.root || learningsRoot(options.agentWorkspace || agentWorkspace())
   const siteDir = join(root, siteId)
@@ -103,7 +129,14 @@ export async function checkLearningExists(
   }
 }
 
-export async function siteSkillsForUrl(url, options: any = {}) {
+/**
+ * List the site skills whose manifest domains match a URL's hostname. A directory
+ * whose manifest is missing or invalid is skipped rather than failing the lookup.
+ * @param url - page URL or bare hostname to match.
+ * @param options - root override and agent workspace used to locate the learnings root.
+ * @returns one entry per matching site skill, in directory order.
+ */
+export async function siteSkillsForUrl(url, options: any = {}): Promise<LearningEntry[]> {
   const hostname = urlHostname(url)
   if (!hostname) {
     return []
@@ -131,7 +164,12 @@ export async function siteSkillsForUrl(url, options: any = {}) {
   return matches
 }
 
-export async function iterLearningDirs(root: string) {
+/**
+ * List the site skill directories under a learnings root.
+ * @param root - learnings root to scan.
+ * @returns the non-underscore subdirectory paths in name order, or an empty list when the root is unreadable.
+ */
+export async function iterLearningDirs(root: string): Promise<string[]> {
   let entries
   try {
     entries = await readdir(root, { withFileTypes: true })
@@ -144,6 +182,12 @@ export async function iterLearningDirs(root: string) {
     .sort()
 }
 
+/**
+ * Read and parse one site skill's manifest.json.
+ * @param siteDir - site skill directory holding manifest.json.
+ * @returns the parsed manifest.
+ * @throws when manifest.json is missing, is not valid JSON, or does not hold a JSON object.
+ */
 export async function loadLearningManifest(
   siteDir: string,
 ): Promise<LearningManifest> {
@@ -163,6 +207,13 @@ export async function loadLearningManifest(
   return parsed as LearningManifest
 }
 
+/**
+ * Resolve one parsed manifest into a learning entry: absolute note paths and
+ * normalized tool maps.
+ * @param siteDir - site skill directory the manifest was read from.
+ * @param manifest - parsed manifest supplying id, name, domains, notes, and tools.
+ * @returns the entry, defaulting a missing id or name to the directory name.
+ */
 export function learningEntry(
   siteDir: string,
   manifest: LearningManifest,
@@ -179,7 +230,12 @@ export function learningEntry(
   }
 }
 
-export async function pathExists(path: string) {
+/**
+ * Whether a path exists and can be stat-ed.
+ * @param path - filesystem path to stat.
+ * @returns true when stat succeeds, false on any failure.
+ */
+export async function pathExists(path: string): Promise<boolean> {
   try {
     await stat(path)
     return true
@@ -188,7 +244,12 @@ export async function pathExists(path: string) {
   }
 }
 
-export function urlHostname(url) {
+/**
+ * Extract the lowercase hostname from a URL or bare hostname.
+ * @param url - absolute URL or bare hostname; a missing scheme is read as https.
+ * @returns the hostname without a trailing dot, or '' when it cannot be parsed.
+ */
+export function urlHostname(url): string {
   try {
     const parsed = String(url).includes('://')
       ? new URL(String(url))

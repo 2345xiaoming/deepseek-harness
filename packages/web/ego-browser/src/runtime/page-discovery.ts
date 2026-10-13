@@ -17,7 +17,11 @@ const pendingPageNotices = new Map<string, UnhandledPageNotice>()
 const observedPages = new Set<string>()
 const pageNoticeListeners = new Set<PageNoticeListener>()
 
-/** Record or refresh one discovered Page that Agent code has not used yet. */
+/**
+ * Record or refresh one discovered Page that Agent code has not used yet.
+ * @param notice - discovery notice; its fields merge over any pending notice
+ *   for the same space and target.
+ */
 export function recordUnhandledPage(notice: UnhandledPageNotice): void {
   const key = pageKey(notice.spaceId, notice.targetId)
   if (observedPages.has(key)) return
@@ -29,7 +33,12 @@ export function recordUnhandledPage(notice: UnhandledPageNotice): void {
   for (const listener of [...pageNoticeListeners]) listener(merged)
 }
 
-/** Refresh the URL of an already-discovered Page without creating a new notice. */
+/**
+ * Refresh the URL of an already-discovered Page without creating a new notice.
+ * @param spaceId - task space that owns the Page.
+ * @param targetId - native page target id.
+ * @param url - URL to publish with the pending notice.
+ */
 export function refreshUnhandledPageNotice(
   spaceId: number,
   targetId: string,
@@ -41,21 +50,32 @@ export function refreshUnhandledPageNotice(
   recordUnhandledPage({ ...existing, url })
 }
 
-/** Mark a Page as used during this round so it needs no further guidance. */
+/**
+ * Mark a Page as used during this round so it needs no further guidance.
+ * @param spaceId - task space that owns the Page.
+ * @param targetId - native page target id.
+ */
 export function markPageObserved(spaceId: number, targetId: string): void {
   const key = pageKey(spaceId, targetId)
   observedPages.add(key)
   pendingPageNotices.delete(key)
 }
 
-/** Remove round state for a Page that no longer exists. */
+/**
+ * Remove round state for a Page that no longer exists.
+ * @param spaceId - task space that owns the Page.
+ * @param targetId - native page target id.
+ */
 export function forgetPageNotice(spaceId: number, targetId: string): void {
   const key = pageKey(spaceId, targetId)
   pendingPageNotices.delete(key)
   observedPages.delete(key)
 }
 
-/** Remove pending Page state when its task space reaches a terminal state. */
+/**
+ * Remove pending Page state when its task space reaches a terminal state.
+ * @param spaceId - task space whose pending and observed Page state is dropped.
+ */
 export function clearSpacePageNotices(spaceId: number): void {
   const prefix = `${spaceId}:`
   for (const key of pendingPageNotices.keys()) {
@@ -66,12 +86,19 @@ export function clearSpacePageNotices(spaceId: number): void {
   }
 }
 
-/** Read pending Page notices without consuming the round summary. */
+/**
+ * Read pending Page notices without consuming the round summary.
+ * @returns copies of every pending notice, leaving the round state intact.
+ */
 export function peekUnhandledPageNotices(): UnhandledPageNotice[] {
   return [...pendingPageNotices.values()].map(notice => ({ ...notice }))
 }
 
-/** Observe future Page discoveries. The caller owns the returned unsubscribe. */
+/**
+ * Observe future Page discoveries. The caller owns the returned unsubscribe.
+ * @param listener - called with each recorded or refreshed notice.
+ * @returns the unsubscribe function; the caller owns calling it.
+ */
 export function subscribeUnhandledPageNotices(
   listener: PageNoticeListener,
 ): () => void {
@@ -79,7 +106,10 @@ export function subscribeUnhandledPageNotices(
   return () => pageNoticeListeners.delete(listener)
 }
 
-/** Drain Page notices once when round output is flushed. */
+/**
+ * Drain Page notices once when round output is flushed.
+ * @returns copies of the pending notices; the round state is cleared.
+ */
 export function consumeUnhandledPageNotices(): UnhandledPageNotice[] {
   const notices = peekUnhandledPageNotices()
   pendingPageNotices.clear()

@@ -21,17 +21,23 @@
 import { getChrome } from './chrome.ts'
 import { attachSession, sendRaw } from './ws-cdp.ts'
 
+/**
+ * One `@N`-addressable node: the CDP backend node id with its accessible role
+ * and name, as read from the AX tree.
+ */
 export interface SnapshotRef {
   backendNodeId: number
   role: string
   name: string | undefined
 }
 
+/** An AX text outline plus the ordered refs the harness numbers as `@1`, `@2`, … */
 export interface Snapshot {
   content: string
   refs: SnapshotRef[]
 }
 
+/** Caller-selected scope and text bound for {@link egoSnapshot}. */
 export interface SnapshotOptions {
   scope?: 'only_within_viewport' | 'full_page'
   maxResultLength?: number
@@ -132,6 +138,10 @@ function nodeLabel(node: AxNode): string {
  * `@N` ref only when its own box intersects. The set comes from layout boxes,
  * which cover text nodes as well as elements, so a node missing from it has no
  * measurable box rather than a known off-screen one.
+ *
+ * @param tree - flattened AX nodes from `Accessibility.getFullAXTree`.
+ * @param visibleBackendNodeIds - backend node ids with a layout box in the viewport; undefined keeps every node.
+ * @returns the indented text tree and its role/name-deduplicated refs.
  */
 export function buildSnapshot(
   tree: AxNode[],
@@ -269,6 +279,9 @@ async function activePageTargetId(): Promise<string> {
  * An absent `scope` means the whole page: `Page.snapshot` applies its own
  * viewport default (public-api-schema), while callers that pass no options —
  * ref refresh, the user-control probe — need every `@N` to stay resolvable.
+ *
+ * @param options - scope and text bound; an absent scope keeps the whole page.
+ * @returns the harness-shaped snapshot of the last page target; truncation appends an ellipsis.
  */
 export async function egoSnapshot(options: SnapshotOptions = {}): Promise<Snapshot> {
   const targetId = await activePageTargetId()

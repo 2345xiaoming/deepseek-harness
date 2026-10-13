@@ -1,31 +1,43 @@
 // @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
+/** Page-side services the keyboard controller dispatches through. */
 export type PageKeyboardServices = {
+  /** Send one raw CDP command; an omitted session targets the default Page. */
   cdp(
     method: string,
     params?: Record<string, unknown>,
     sessionId?: string,
     timeoutMs?: number,
   ): Promise<any>
+  /** Delay in milliseconds, used by the `delay` options between key events. */
   sleep(ms: number): Promise<void>
+  /** Install `content` on the clipboard for the duration of `action`, then restore the previous contents. */
   withTemporaryClipboardText<T>(
     content: PageClipboardContent,
     action: () => Promise<T>,
   ): Promise<T>
+  /** Host platform used to resolve `ControlOrMeta`; defaults to `process.platform`. */
   platform?: string
 }
 
+/** Clipboard payload accepted by `paste`: plain text, or text with HTML markup. */
 export type PageClipboardContent =
   | string
   | {
+    /** Plain-text clipboard contents. */
     text: string
+    /** HTML flavour installed alongside `text`; omitted leaves text only. */
     html?: string
   }
 
+/** Hold delay for one press. */
 export type PageKeyboardPressOptions = {
+  /** Milliseconds to hold the chord before releasing it; omitted releases immediately. */
   delay?: number
 }
 
+/** Per-character delay for `type`. */
 export type PageKeyboardTypeOptions = {
+  /** Milliseconds paused at each character; omitted types without pausing. */
   delay?: number
 }
 
@@ -91,18 +103,40 @@ export class PageKeyboardController {
     this.#runObserved = runObserved
   }
 
+  /**
+   * CDP modifier bitmask for the modifiers currently held: Alt 1, Control 2,
+   * Meta 4, Shift 8.
+   * @returns the combined bitmask, 0 when no modifier is held.
+   */
   modifierMask(): number {
     return modifierMask(this.#pressedModifiers)
   }
 
+  /**
+   * Press and hold one key until `up`. The key stays pressed for later actions on
+   * this Page, and pressing a held key again reports auto-repeat.
+   * @param key - key name, or `ControlOrMeta` to resolve for the host platform.
+   * @returns the session-run result for this press.
+   */
   async down(key: string): Promise<unknown> {
     return this.#run(sessionId => this.#down(sessionId, key))
   }
 
+  /**
+   * Release one key pressed by `down`, clearing it from the held modifiers.
+   * @param key - key name, or `ControlOrMeta` to resolve for the host platform.
+   * @returns the session-run result for this release.
+   */
   async up(key: string): Promise<unknown> {
     return this.#run(sessionId => this.#up(sessionId, key))
   }
 
+  /**
+   * Press a chord inside a fresh observed Page action boundary.
+   * @param chord - `+`-separated chord, for example `Control+Shift+KeyA`.
+   * @param options - hold delay applied before the keys are released.
+   * @returns the session-run result for this chord.
+   */
   async press(
     chord: string,
     options: PageKeyboardPressOptions = {},
@@ -112,7 +146,14 @@ export class PageKeyboardController {
     )
   }
 
-  /** Press a chord inside an existing Page action boundary. */
+  /**
+   * Press a chord inside an existing Page action boundary. Tokens are pressed in
+   * order and released in reverse, so a failed shortcut cannot leave a modifier
+   * held for later actions; an action error is rethrown before a release error.
+   * @param sessionId - the Page session that receives the key events.
+   * @param chord - `+`-separated chord, for example `Control+Shift+KeyA`.
+   * @param options - hold delay applied before the keys are released.
+   */
   async pressInSession(
     sessionId: string,
     chord: string,
@@ -145,6 +186,12 @@ export class PageKeyboardController {
     if (releaseError) throw releaseError
   }
 
+  /**
+   * Paste clipboard content as `ControlOrMeta+V`, installing the content only for
+   * that chord and restoring the previous clipboard afterwards.
+   * @param content - text, or text with HTML markup.
+   * @returns the session-run result for this paste.
+   */
   async paste(content: PageClipboardContent): Promise<unknown> {
     assertClipboardContent(content)
     return this.#runObserved(sessionId =>
@@ -154,11 +201,23 @@ export class PageKeyboardController {
     )
   }
 
+  /**
+   * Insert text through `Input.insertText`, without dispatching key events.
+   * @param text - the text to insert.
+   * @returns the session-run result for this insertion.
+   */
   async insertText(text: string): Promise<unknown> {
     assertText(text, 'page.keyboard.insertText')
     return this.#run(sessionId => this.#insertText(sessionId, text))
   }
 
+  /**
+   * Type text character by character: characters present on the US layout use
+   * real key events, and everything else goes through `Input.insertText`.
+   * @param text - the text to type.
+   * @param options - delay paused at each character.
+   * @returns the session-run result for this typing.
+   */
   async type(
     text: string,
     options: PageKeyboardTypeOptions = {},
@@ -268,7 +327,11 @@ function assertClipboardContent(
   }
 }
 
-/** Split a chord without losing a literal `+` key, matching Playwright. */
+/**
+ * Split a chord without losing a literal `+` key, matching Playwright.
+ * @param chord - `+`-separated chord such as `Control+Shift+KeyA`.
+ * @returns the chord's tokens in press order.
+ */
 export function splitChord(chord: string): string[] {
   if (typeof chord !== 'string' || chord.length === 0) {
     throw new TypeError('page.keyboard.press requires a non-empty key')

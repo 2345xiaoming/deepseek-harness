@@ -53,6 +53,7 @@ function secondsOption(ms?: number): { timeout: number } | Record<string, never>
 /**
  * Register the ego-browser tool set on `ctx.tools`. All registrations are
  * fiber-scoped (via ctx.effect) so hot-reload/unload cleans them up.
+ * @param ctx - Host context whose `tools` service receives the registrations.
  */
 export function applyEgoBrowserTools(ctx: Context): void {
   ctx.effect(() =>

@@ -34,7 +34,18 @@ const RESOLVE_FILE_INPUT_SOURCE = `function resolveFileInputForUpload() {
   );
 }`
 
-/** Set one or more local files on an input in one explicit Page session. */
+/**
+ * Set one or more local files on an input in one explicit Page session. The
+ * selector may name the file input, its label, or a container holding exactly
+ * one file input; anything else is rejected with `TypeError`. Objects resolved
+ * for the attempt are released even when the assignment fails.
+ * @param services - Page services supplying CDP.
+ * @param sessionId - the Page session holding the input.
+ * @param refMap - refs held for this Page, consulted before selector matching.
+ * @param selector - CSS selector, `@ref`, `loc=`, or `xpath=` expression.
+ * @param path - one absolute file path or a list of them.
+ * @param iframeSessions - frame id to session id map discovered for this Page.
+ */
 export async function setInputFilesInPage(
   services: PageInputServices,
   sessionId: string,
@@ -90,7 +101,12 @@ export async function setInputFilesInPage(
   }
 }
 
-/** Validate local file paths without touching the operating-system chooser. */
+/**
+ * Validate local file paths without touching the operating-system chooser.
+ * @param path - one absolute file path or a list of them.
+ * @param methodName - public method name used in the rejection message.
+ * @returns the paths as a list, unchanged.
+ */
 export function normalizeFilePaths(
   path: string | string[],
   methodName: string,
@@ -107,7 +123,15 @@ export function normalizeFilePaths(
   return files
 }
 
-/** Set files using the file input identity supplied by a chooser event. */
+/**
+ * Set files on a file input identified by a chooser event, addressed by backend
+ * node id or remote object id.
+ * @param services - Page services supplying CDP.
+ * @param sessionId - the Page session holding the file input.
+ * @param files - absolute paths to assign.
+ * @param backendNodeId - backend node id of the file input, when known.
+ * @param objectId - remote object id of the file input, when known.
+ */
 export async function setFilesOnBackendNode(
   services: PageInputServices,
   sessionId: string,

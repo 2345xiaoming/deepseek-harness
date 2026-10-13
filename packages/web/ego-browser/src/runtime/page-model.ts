@@ -206,11 +206,16 @@ type FinishOptions = {
   keep: 'all' | string[]
 }
 
+/** What finishing a TaskSpace closed, kept, and left open for the user. */
 export type TaskFinishReceipt = {
   spaceId: number
+  /** Whether the whole space was closed instead of selected Pages. */
   closedSpace: boolean
+  /** Labels of managed Pages left open. */
   keptManagedLabels: string[]
+  /** Labels of Agent-owned Pages this finish closed. */
   closedManagedLabels: string[]
+  /** Open tabs the ledger never managed, which the finish left untouched. */
   preservedUnmanagedCount: number
 }
 
@@ -227,6 +232,10 @@ type PageWaitForFunctionOptions = {
   polling?: number
 }
 
+/**
+ * Options for `page.fetch`: the standard request fields plus a timeout and an
+ * optional file destination for the response body.
+ */
 export type PageFetchOptions = {
   timeout?: number
   saveAs?: string
@@ -249,6 +258,10 @@ export type PageFetchOptions = {
   referrerPolicy?: string
 }
 
+/**
+ * Response of `page.fetch`: status and headers always, plus either the body as
+ * text, as Base64 for binary payloads, or the path a saved body was written to.
+ */
 export type PageFetchResponse = {
   ok: boolean
   status: number
@@ -399,6 +412,7 @@ type PageModelServices = {
   pageBudget: number
 }
 
+/** One open tab as the TaskSpace inventory reports it. */
 export type TabInventoryItem = {
   targetId: string
   label?: string
@@ -409,16 +423,28 @@ export type TabInventoryItem = {
   openedBy: PageOrigin
 }
 
+/** Pages and dialogs an action produced alongside its primary effect. */
 export type PageActionReceipt = {
   popups?: Array<{ label: string; targetId: string }>
   dialog?: Record<string, unknown>
 }
 
+/**
+ * A `page.evaluate`-family call exceeded its page-execution deadline. The flags
+ * separate whether the evaluated code was stopped from whether the Page still
+ * answers, because an evaluation that kept running can mutate the Page after
+ * the caller receives this error.
+ */
 export class PageEvaluationTimeoutError extends Error {
+  /** Stable error code `EGO_PAGE_EVALUATION_TIMED_OUT`. */
   readonly code = 'EGO_PAGE_EVALUATION_TIMED_OUT'
+  /** Execution budget the call exceeded, in milliseconds. */
   readonly timeoutMs: number
+  /** Whether the runtime stopped the evaluated code. */
   readonly executionStopped: boolean
+  /** Whether the evaluation can still mutate the Page after this error. */
   readonly mayHaveLateEffects: boolean
+  /** Whether the Page answered a health probe after the timeout. */
   readonly pageResponsive: boolean
 
   constructor(
@@ -781,6 +807,9 @@ const baseDefaultServices: Omit<PageModelServices, 'ledger' | 'pageBudget'> = {
  * Create a TaskSpace object around a resolved native task-space descriptor.
  * The helper layer owns name/id resolution; this layer owns page identity and
  * routes every browser operation through the native operation gate.
+ * @param descriptor - resolved native task-space descriptor.
+ * @param overrides - services replacing the defaults, for tests and embedding.
+ * @returns a handle that owns the space's Page labels and browser operations.
  */
 export function createTaskSpaceHandle(
   descriptor: TaskSpaceDescriptor,
@@ -810,6 +839,7 @@ export function createTaskSpaceHandle(
 /**
  * Capture the active tab at a claim/takeover boundary before Agent actions can
  * change it. This is called by the helper layer and is not injected directly.
+ * @param task - task space whose active tab is captured.
  */
 export async function captureTaskSpaceUserBoundary(
   task: TaskSpace,
@@ -817,7 +847,11 @@ export async function captureTaskSpaceUserBoundary(
   await task.captureUserBoundary(captureUserBoundaryToken)
 }
 
-/** Initialize Page state and round-local discovery before exposing a TaskSpace. */
+/**
+ * Initialize Page state and round-local discovery before exposing a TaskSpace.
+ * @param task - task space to initialize.
+ * @param options - `created` marks a space whose first tab must become `p1`.
+ */
 export async function initializeTaskSpaceHandle(
   task: TaskSpace,
   options: { created?: boolean } = {},
@@ -828,7 +862,10 @@ export async function initializeTaskSpaceHandle(
   await task.initializeBackgroundPageDiscovery(initializeTaskSpaceToken)
 }
 
-/** Close a newly created space whose Page-model initialization did not commit. */
+/**
+ * Close a newly created space whose Page-model initialization did not commit.
+ * @param task - task space to close.
+ */
 export async function rollbackCreatedTaskSpace(task: TaskSpace): Promise<void> {
   await task[rollbackCreatedTaskSpaceToken]()
 }
@@ -1691,7 +1728,7 @@ class Page {
       let rootContext:
         | {
           frameId?: string
-          frameProvenance?: 'page' | 'frame' | 'unknown'
+          frameOrigin?: 'page' | 'frame' | 'unknown'
         }
         | undefined
       if (rootRefId) {
@@ -1710,8 +1747,8 @@ class Page {
         root = entry.backendNodeId
         rootContext = {
           ...(entry.frameId ? { frameId: entry.frameId } : {}),
-          ...(entry.frameProvenance
-            ? { frameProvenance: entry.frameProvenance }
+          ...(entry.frameOrigin
+            ? { frameOrigin: entry.frameOrigin }
             : {}),
         }
       }

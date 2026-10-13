@@ -18,6 +18,11 @@ type ParamInfo = {
   default: string | null
 }
 
+/**
+ * One helper entry rendered by {@link formatHelp}: its signature, the
+ * description and params recovered from its JSDoc, and whether it belongs to
+ * the public v2 surface.
+ */
 export type HelperDoc = {
   name: string
   signature: string
@@ -30,6 +35,14 @@ export type HelperDoc = {
 
 let cache: Map<string, HelperDoc> | null = null
 
+/**
+ * Look up helper documentation: every public entry when no name is given,
+ * legacy helpers under `legacy`, and a message string for unknown names.
+ *
+ * @param helpers - installed helper registry, used to tell a hidden legacy helper from an unknown name.
+ * @param names - helper names to document; `legacy` optionally followed by legacy names.
+ * @returns one doc per name, an array for several names, or a message string.
+ */
 export function help(
   helpers: Record<string, unknown>,
   ...names: string[]
@@ -68,6 +81,13 @@ export function help(
   })
 }
 
+/**
+ * Render one helper doc as the text help() prints: description, one `@param`
+ * line per parameter, an optional `@returns` line, then the signature.
+ *
+ * @param doc - the helper doc to render.
+ * @returns the rendered text, with no trailing newline.
+ */
 export function formatHelp(doc: HelperDoc): string {
   const lines: string[] = []
   if (doc.public) {

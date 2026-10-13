@@ -10,6 +10,7 @@ type FillInputOptions = {
   timeout?: number
 }
 
+/** CDP and timing facilities one keyboard operation needs from its Page session. */
 export type KeyboardServices = {
   cdp(
     method: string,
@@ -101,7 +102,12 @@ const defaultKeyboardServices: KeyboardServices = {
   },
 }
 
-export function keyDefinition(key) {
+/**
+ * Resolve a key name or single printable character to its key description.
+ * @param key - Key name such as `Enter`, or a one-character string.
+ * @returns The virtual key code, DOM `code`, and text to insert for that key.
+ */
+export function keyDefinition(key: string): { vk: number; key: string; code: string; text: string } {
   const special = KEYS[key]
   if (special) {
     return special
@@ -154,21 +160,28 @@ function editingCommandsForKey(key, modifiers, platform: string) {
 
 /**
  * Dispatch a key press through CDP.
- * @param {string} key Key name such as Enter, Tab, ArrowLeft, or a single printable character.
- * @param {number} [modifiers=0] CDP modifier bitfield: Alt=1, Ctrl=2, Meta/Cmd=4, Shift=8.
- * @returns {Promise<void>}
+ * @param key - Key name such as Enter, Tab, ArrowLeft, or a single printable character.
+ * @param modifiers - CDP modifier bitfield: Alt=1, Ctrl=2, Meta/Cmd=4, Shift=8.
+ * @returns Resolves after the key press is dispatched.
  */
-export async function pressKey(key, modifiers = 0) {
+export async function pressKey(key: string, modifiers = 0): Promise<void> {
   return pressKeyInPage(defaultKeyboardServices, undefined, key, modifiers)
 }
 
-/** Dispatch one key press through an explicit Page session. */
+/**
+ * Dispatch one key press through an explicit Page session.
+ * @param services - CDP and timing facilities for the Page session.
+ * @param sessionId - Target Page session, or undefined for the current page.
+ * @param key - Key name or single printable character to press.
+ * @param modifiers - CDP modifier bitfield: Alt=1, Ctrl=2, Meta/Cmd=4, Shift=8.
+ * @returns Resolves after the key down/up sequence completes.
+ */
 export async function pressKeyInPage(
   services: KeyboardServices,
   sessionId: string | undefined,
   key: string,
   modifiers = 0,
-) {
+): Promise<void> {
   const { vk, code, text } = keyDefinition(key)
   const platform = services.platform ?? state.platform
   const commands = editingCommandsForKey(key, modifiers, platform)
@@ -281,19 +294,25 @@ function formatShortcut(key: string, modifiers: number) {
 
 /**
  * Insert text at the focused input using CDP Input.insertText.
- * @param {string} text Text to insert.
- * @returns {Promise<void>}
+ * @param text - Text to insert.
+ * @returns Resolves after the text is inserted.
  */
-export async function typeText(text) {
+export async function typeText(text: string): Promise<void> {
   await typeTextInPage(defaultKeyboardServices, undefined, text)
 }
 
-/** Insert text through an explicit Page session. */
+/**
+ * Insert text through an explicit Page session.
+ * @param services - CDP and timing facilities for the Page session.
+ * @param sessionId - Target Page session, or undefined for the current page.
+ * @param text - Text to insert; a non-string value throws a TypeError.
+ * @returns Resolves after the text is inserted.
+ */
 export async function typeTextInPage(
   services: KeyboardServices,
   sessionId: string | undefined,
   text: string,
-) {
+): Promise<void> {
   if (typeof text !== 'string') {
     throw new TypeError('page.keyboard.type text must be a string')
   }
@@ -302,16 +321,17 @@ export async function typeTextInPage(
 
 /**
  * Focus an input, optionally clear it, type text, and fire input/change events.
- * @param {string} selector CSS selector / @ref / loc= / xpath= for the input-like element.
- * @param {string} text Text to write.
- * @param {{clearFirst?: boolean, timeout?: number}} [options]
- * @returns {Promise<void>}
+ * @param selector - CSS selector / @ref / loc= / xpath= for the input-like element.
+ * @param text - Text to write.
+ * @param options - `clearFirst` defaults to true; a positive `timeout` waits for the element first.
+ * @returns Resolves after the value and its input/change events are dispatched.
+ * @throws When a positive `options.timeout` elapses before the element appears.
  */
 export async function fillInput(
-  selector,
-  text,
+  selector: string,
+  text: string,
   options: FillInputOptions = {},
-) {
+): Promise<void> {
   const clearFirst = options.clearFirst ?? true
   const timeout = options.timeout ?? 0
   if (timeout > 0 && !(await waitForElement(selector, { timeout }))) {
@@ -363,13 +383,13 @@ export async function fillInput(
 
 /**
  * Focus an element and dispatch a DOM KeyboardEvent in page JavaScript.
- * Note: dispatched event has isTrusted=false; some frameworks ignore it (see docs/issues/dispatchKey-synthetic-keyboard-event.md).
- * @param {string} selector CSS selector / @ref / loc= / xpath= for the target element.
- * @param {string} [key="Enter"] Event key.
- * @param {"keydown"|"keypress"|"keyup"|string} [event="keypress"] Event type.
- * @returns {Promise<void>}
+ * The dispatched event has `isTrusted=false`, so pages that require trusted input ignore it; use `pressKey` for a real CDP key event.
+ * @param selector - CSS selector / @ref / loc= / xpath= for the target element.
+ * @param key - Event key; defaults to `Enter`.
+ * @param event - Event type; defaults to `keypress`.
+ * @returns Resolves after the event is dispatched.
  */
-export async function dispatchKey(selector, key = 'Enter', event = 'keypress') {
+export async function dispatchKey(selector: string, key = 'Enter', event = 'keypress'): Promise<void> {
   const { vk, code } = keyDefinition(key)
   await resolveAndCall(
     selector,

@@ -7,7 +7,12 @@ type BrowserVersionRuntime = {
   getBrowserVersion?: () => unknown | Promise<unknown>
 }
 
-/** Emit a best-effort update hint without making it part of task success. */
+/**
+ * Emit a best-effort update hint without making it part of task success: the
+ * probe races a 500 ms deadline and every failure is swallowed.
+ * @param runtime - Optional host exposing `getBrowserVersion`; a missing or non-callable method emits nothing.
+ * @param emit - Sink for the one notice line, called only when an update is actually available.
+ */
 export async function emitUpdateNotice(
   runtime: BrowserVersionRuntime | null | undefined,
   emit: (line: string) => void,

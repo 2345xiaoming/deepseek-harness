@@ -7,12 +7,15 @@ import {
 import { win32 } from 'node:path'
 import type { Writable } from 'node:stream'
 
+/** Outcome of finishing a clipboard transaction: the previous contents were put back, or another process replaced them first. */
 export type ClipboardTransactionStatus = 'restored' | 'changed'
 
+/** Handle for one temporary clipboard session; `finish` restores the previous contents or reports that they changed. */
 export type ClipboardTransaction = {
   finish(): Promise<ClipboardTransactionStatus>
 }
 
+/** Clipboard value to publish: plain text, plus an optional HTML representation of the same value. */
 export type ClipboardContent = {
   text: string
   html?: string
@@ -29,8 +32,14 @@ type ClipboardHostMessage = {
   message?: string
 }
 
+/**
+ * The paste already happened, but the previous clipboard contents could not be
+ * restored. Callers must not retry the paste: a retry would paste twice.
+ */
 export class ClipboardRestoreError extends Error {
+  /** Stable error code for callers that classify this failure. */
   readonly code = 'EGO_CLIPBOARD_RESTORE_FAILED'
+  /** True because the paste completed before the restore failed. */
   readonly pasteCompleted = true
 
   constructor(cause: unknown) {
@@ -48,6 +57,13 @@ let transactionQueue: Promise<void> = Promise.resolve()
  * Run one action while the system clipboard temporarily contains `text`.
  * Transactions are serialized within the process because the clipboard is a
  * single user resource shared by every Page.
+ * @param text - plain text, or text plus HTML, to publish for the duration of the action.
+ * @param action - paste action that runs while the temporary value is live.
+ * @param options - optionally overrides how the platform transaction is started.
+ * @returns the action's value.
+ * @throws ClipboardRestoreError when the action succeeded but the previous
+ *   clipboard contents could not be restored; an AggregateError carries both
+ *   failures when the action failed too.
  */
 export async function withTemporaryClipboardText<T>(
   text: ClipboardInput,
@@ -103,7 +119,13 @@ export async function withTemporaryClipboardText<T>(
   }
 }
 
-/** Temporarily publish multiple representations of the same clipboard value. */
+/**
+ * Temporarily publish multiple representations of the same clipboard value.
+ * @param content - text plus optional HTML to publish for the duration of the action.
+ * @param action - paste action that runs while the temporary value is live.
+ * @param options - optionally overrides how the platform transaction is started.
+ * @returns the action's value, with the restore guarantees of withTemporaryClipboardText.
+ */
 export async function withTemporaryClipboardContent<T>(
   content: ClipboardContent,
   action: () => Promise<T>,
@@ -668,6 +690,10 @@ const WIN32_CLIPBOARD_HOST_COMMAND = Buffer.from(
   'utf16le',
 ).toString('base64')
 
+/**
+ * Testing surface for the platform clipboard internals: the transaction
+ * starters, the HTML clipboard envelope, and the Windows host script.
+ */
 export const __testing = {
   beginNativeClipboardTransaction,
   beginWin32ClipboardTransaction,

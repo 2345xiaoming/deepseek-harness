@@ -7,13 +7,14 @@ import { state } from './state.ts'
 let hasWarnedAboutFunctionJs = false
 
 /**
- * Send a raw Chrome DevTools Protocol command.
- * @param {string} method CDP method name, for example Runtime.evaluate.
- * @param {object} [params] CDP command parameters.
- * @param {string} [sessionId] Optional attached target session id.
- * @returns {Promise<object>} CDP result object.
+ * Send a raw Chrome DevTools Protocol command. On the default session, Network.enable
+ * and Network.disable also record the domain's state for helpers that restore it.
+ * @param method - CDP method name, for example Runtime.evaluate.
+ * @param params - CDP command parameters.
+ * @param sessionId - optional attached target session id; the state override only applies to the default session.
+ * @returns the CDP result object, or an empty object when the response carries none.
  */
-export async function cdp(method, params: any = {}, sessionId = undefined) {
+export async function cdp(method, params: any = {}, sessionId = undefined): Promise<any> {
   const result = state.cdpOverride
     ? await state.cdpOverride(method, params, sessionId)
     : (await browserCdp(method, params, sessionId)).result || {}
@@ -31,13 +32,14 @@ export async function cdp(method, params: any = {}, sessionId = undefined) {
 
 /**
  * Evaluate JavaScript in the current page or a target tab.
- * @param {string | Function} expression JavaScript source string or a function whose body should be evaluated.
- *   Passing a function is accepted as a convenience but emits a one-time warning to stderr so callers can
- *   switch to the canonical string form. Top-level return statements in strings are auto-wrapped in an IIFE.
- * @param {string} [targetId] Optional target id to attach and evaluate in.
- * @returns {Promise<any>} Runtime.evaluate return-by-value result.
+ * @param expression - JavaScript source string, or a function whose body is evaluated; a function emits a
+ *   one-time warning to stderr because auto-wrap captures no closure variables and passes no arguments. A
+ *   top-level `return` in a string is auto-wrapped in an async IIFE.
+ * @param targetId - optional target id to attach and evaluate in.
+ * @returns the Runtime.evaluate return-by-value result.
+ * @throws when `expression` is neither a string nor a function, or when the evaluation reports an exception.
  */
-export async function js(expression, targetId = undefined) {
+export async function js(expression, targetId = undefined): Promise<any> {
   if (typeof expression === 'function') {
     const source = expression.toString()
     if (!hasWarnedAboutFunctionJs) {
@@ -96,7 +98,14 @@ async function runtimeEvaluate(
   }
 }
 
-export function runtimeValue(response, expression) {
+/**
+ * Unwrap a Runtime.evaluate response into its JavaScript value.
+ * @param response - the CDP response carrying `result` and optional `exceptionDetails`.
+ * @param expression - the evaluated source, quoted in the thrown error for diagnosis.
+ * @returns the value, the decoded unserializable value, or null when the response carries neither.
+ * @throws when the response reports an exception or an error subtype.
+ */
+export function runtimeValue(response, expression): any {
   const result = response.result || {}
   const details = response.exceptionDetails
   if (details || result.subtype === 'error') {
@@ -133,7 +142,13 @@ function jsExceptionDescription(result, details) {
   return desc || details?.text || 'JavaScript evaluation failed'
 }
 
-export function decodeUnserializableJsValue(value) {
+/**
+ * Decode a CDP unserializable value into its JavaScript value: `NaN`, `Infinity`,
+ * `-Infinity`, `-0`, or a BigInt literal.
+ * @param value - the CDP `unserializableValue` string.
+ * @returns the decoded number or bigint, or the input unchanged when it matches none of those forms.
+ */
+export function decodeUnserializableJsValue(value): any {
   if (value === 'NaN') {
     return Number.NaN
   }

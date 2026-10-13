@@ -4,7 +4,7 @@ import { validateLocatorBackendNodes } from './element-resolver.ts'
 type SnapshotRef = {
   backendNodeId?: number
   frameId?: string
-  frameProvenance?: 'page' | 'frame' | 'unknown'
+  frameOrigin?: 'page' | 'frame' | 'unknown'
   loc?: string
   name?: string
   refId?: number | string
@@ -39,7 +39,7 @@ type SnapshotServices = {
 
 type SnapshotFrameContext = {
   frameId?: string
-  frameProvenance?: 'page' | 'frame' | 'unknown'
+  frameOrigin?: 'page' | 'frame' | 'unknown'
 }
 
 /**
@@ -48,6 +48,10 @@ type SnapshotFrameContext = {
  * Native output uses two-space indentation as its tree encoding. If an older
  * runtime returns another shape, leave it untouched instead of risking a
  * lossy rewrite.
+ * @param content - native snapshot text to compact.
+ * @returns the compacted text with its original line ending and any lines
+ *   before the `root` marker kept, or `content` unchanged when it is not a
+ *   two-space-indented tree.
  */
 export function compactSnapshotContent(content: string): string {
   if (typeof content !== 'string' || content.length === 0) return content
@@ -79,7 +83,12 @@ export function compactSnapshotContent(content: string): string {
   return rendered + (trailingNewline ? newline : '')
 }
 
-/** Compact textual content and omit native locator status sentinels. */
+/**
+ * Compact textual content and omit native locator status sentinels.
+ * @param result - snapshot result mutated in place: `content` is compacted and
+ *   every `unstable` or `ambiguous` locator is dropped.
+ * @returns the same `result` object.
+ */
 export function compactSnapshotResult(result: SnapshotResult): SnapshotResult {
   if (!result || typeof result !== 'object') return result
   if (typeof result.content === 'string') {
@@ -126,7 +135,13 @@ function snapshotLineRefId(line: string): string | undefined {
   return match ? match[1] : undefined
 }
 
-/** Rewrite only ref metadata, never quoted names or locator values. */
+/**
+ * Rewrite only ref metadata, never quoted names or locator values.
+ * @param content - native snapshot text whose `[ref=…]` ids are replaced.
+ * @param refIds - old ref id to replacement ref id.
+ * @returns the text with each line's unquoted ref metadata rewritten, or a line
+ *   unchanged when its id has no replacement.
+ */
 export function rewriteSnapshotRefIds(
   content: string,
   refIds: ReadonlyMap<string, string>,
@@ -199,7 +214,15 @@ function renderSnapshotTree(
   return output
 }
 
-/** Return whether one advertised locator resolves uniquely to its source ref. */
+/**
+ * Return whether one advertised locator resolves uniquely to its source ref.
+ * @param cdp - CDP transport used for the accessibility lookup.
+ * @param pageSessionId - CDP session of the Page that owns the ref.
+ * @param iframeSessions - frame id to CDP session for the Page's iframes.
+ * @param ref - snapshot ref whose stable locator is validated.
+ * @returns true when the locator resolves to `ref.backendNodeId`; false when
+ *   the ref carries no usable locator or the locator does not match.
+ */
 export async function validateSnapshotLocator(
   cdp: CdpAdapter,
   pageSessionId: string,
@@ -217,7 +240,13 @@ export async function validateSnapshotLocator(
   return valid.has(0)
 }
 
-/** Omit invalid native stable locators while retaining their short-lived refs. */
+/**
+ * Omit invalid native stable locators while retaining their short-lived refs.
+ * @param result - snapshot result mutated in place: a failing `loc` is deleted
+ *   and its locator text is removed from `content`.
+ * @param validator - decides per ref whether its locator still resolves.
+ * @returns the same `result` object.
+ */
 export async function sanitizeSnapshotLocators(
   result: SnapshotResult,
   validator: (ref: SnapshotRef) => Promise<boolean>,
@@ -287,7 +316,18 @@ function omitSnapshotLineLocator(
   return text
 }
 
-/** Preserve native frame provenance and validate stable locators for the Page API. */
+/**
+ * Attribute every ref to the frame it was seen in and drop stable locators that
+ * do not resolve, leaving their short-lived refs usable.
+ * @param services - CDP transport used for accessibility lookups.
+ * @param pageSessionId - CDP session of the Page that owns the snapshot.
+ * @param iframeSessions - frame id to CDP session for the Page's iframes.
+ * @param result - native snapshot result mutated in place.
+ * @param rootContext - frame of the subtree root the snapshot was taken from,
+ *   when the snapshot covered a subtree rather than the whole Page.
+ * @returns the same `result` with frame attribution applied and invalid
+ *   locators removed.
+ */
 export async function preparePageSnapshotResult(
   services: SnapshotServices,
   pageSessionId: string,
@@ -321,16 +361,16 @@ export async function preparePageSnapshotResult(
   for (const ref of refs) {
     const refId = ref.refId ?? ref.backendNodeId
     if (ref.frameId) {
-      ref.frameProvenance = 'frame'
+      ref.frameOrigin = 'frame'
     } else if (refId !== undefined && descendantRefIds.has(String(refId))) {
-      ref.frameProvenance = 'unknown'
+      ref.frameOrigin = 'unknown'
     } else if (rootContext.frameId) {
       ref.frameId = rootContext.frameId
-      ref.frameProvenance = 'frame'
+      ref.frameOrigin = 'frame'
     } else {
-      // A subtree root with frame provenance always carries a frameId, so the
-      // remaining cases are a page-owned root or one whose frame is unknown.
-      ref.frameProvenance = rootContext.frameProvenance ?? 'page'
+      // A subtree root with a known frame origin always carries a frameId, so
+      // the remaining cases are a page-owned root or one whose frame is unknown.
+      ref.frameOrigin = rootContext.frameOrigin ?? 'page'
     }
   }
   return sanitizeSnapshotLocators(result, async ref => validRefs.has(ref))

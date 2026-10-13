@@ -1,6 +1,7 @@
 // @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 import { markHardStop } from './output-sink.ts'
 
+/** Prefix on the hard-stop message raised for a script that still calls the 1.3 Skill facade. */
 export const STALE_SKILL_PREFIX = '[ego-browser:skill-stale]'
 
 // These are the public top-level members exposed by the formal 1.3 Skill. Keep
@@ -23,6 +24,12 @@ const EGO_BROWSER_13_MEMBERS = new Set([
   'closeTaskSpace',
 ])
 
+/**
+ * Raised for the top-level `egoBrowser.*` members published by the 1.3 Skill,
+ * whose replacements live on TaskSpace/Page. Constructing it also marks the
+ * round as hard-stopped, so the migration message survives a caller that
+ * catches the error.
+ */
 export class EgoBrowserSkillStaleError extends Error {
   constructor(member: string) {
     super(
@@ -36,7 +43,11 @@ export class EgoBrowserSkillStaleError extends Error {
   }
 }
 
-/** Create the migration-only namespace installed in place of the 1.3 facade. */
+/**
+ * Create the migration-only namespace installed in place of the 1.3 facade.
+ *
+ * @returns a proxy that throws for each 1.3 member name and yields undefined for every other property.
+ */
 export function createStaleEgoBrowserGuard(): Record<string, unknown> {
   return new Proxy(Object.create(null), {
     get(_target, property) {
@@ -55,7 +66,11 @@ export function createStaleEgoBrowserGuard(): Record<string, unknown> {
   })
 }
 
-/** Install the guard for SDK hosts that expose helpers directly on globalThis. */
+/**
+ * Install the guard for SDK hosts that expose helpers directly on globalThis.
+ *
+ * @param target - global object receiving the non-enumerable `egoBrowser` property.
+ */
 export function installStaleEgoBrowserGuard(
   target: Record<string, unknown>,
 ): void {

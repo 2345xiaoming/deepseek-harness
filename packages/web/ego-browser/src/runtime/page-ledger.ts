@@ -16,27 +16,40 @@ import {
   type PageRefState,
 } from './page-ref-registry.ts'
 
+/** Who opened a Page: this Agent, or a tab the runtime could not attribute. */
 export type PageOrigin = 'agent' | 'unknown'
 
+/** One Page recorded in a task space's ledger. */
 export type PageLedgerEntry = {
   targetId: string
   openedBy: PageOrigin
+  /** Persisted public ref state, when the Page has one. */
   refs?: PageRefState
 }
 
+/** A ledger entry under the label the Page API publishes, such as `p1`. */
 export type ManagedPage = PageLedgerEntry & {
   label: string
 }
 
+/** Durable Page-model state for one task space, written as one JSON document per space. */
 export type PageLedger = {
+  /** Browser instance that owns this ledger; ledgers of other instances are ignored. */
   browserInstanceId?: string
   spaceId: number
+  /** Sequence the next automatic `pN` label starts from. */
   nextLabel: number
+  /** Every label handed out so far; labels are never reused. */
   usedLabels: string[]
+  /** Labels whose Pages were released to the user and so are permanently gone. */
   releasedLabels: string[]
+  /** Whether the first reconciliation has observed the user's control boundary. */
   initialized: boolean
+  /** Whether the next reconciliation must preserve tabs as user-owned. */
   userControlPending: boolean
+  /** Live tabs the ledger preserves but does not manage, keyed by target id. */
   unmanagedTargets: Record<string, PageOrigin>
+  /** Managed Pages keyed by published label. */
   pages: Record<string, PageLedgerEntry>
 }
 
@@ -49,7 +62,11 @@ type PageLedgerStoreOptions = {
 
 const DEFAULT_STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000
 
-/** Stable across Agent rounds and Node-service restarts in one Ego Lite run. */
+/**
+ * Stable across Agent rounds and Node-service restarts in one Ego Lite run.
+ * @param parentPid - process id of the host that owns the browser runtime.
+ * @returns the instance id every runtime started by that host shares.
+ */
 export function runtimeInstanceId(parentPid = process.ppid): string {
   return `browser-host:${parentPid}`
 }
@@ -70,6 +87,7 @@ type ReconcileOptions = {
  * partially written ledger.
  */
 export class PageLedgerStore {
+  /** Directory holding one `space-<id>.json` ledger per task space. */
   readonly rootDir: string
   readonly #writeToken = randomUUID()
   readonly #browserInstanceId?: string | (() => string | Promise<string>)
@@ -95,13 +113,25 @@ export class PageLedgerStore {
     }
   }
 
+  /**
+   * Read one task space's ledger as a copy the caller may mutate.
+   * A missing ledger, or one written by another browser instance, reads as
+   * empty; a stored ledger that fails validation throws.
+   * @param spaceId - task space whose ledger is read.
+   * @returns the ledger copy, or an empty ledger when none applies.
+   */
   async read(spaceId: number): Promise<PageLedger> {
     assertSpaceId(spaceId)
     const ledger = await this.#readCurrent(spaceId)
     return cloneLedger(ledger)
   }
 
-  /** Replace any stale state for a newly created space with its Agent-owned p1. */
+  /**
+   * Replace any stale state for a newly created space with its Agent-owned p1.
+   * @param spaceId - task space that was just created.
+   * @param targetId - native page target id of the space's first tab.
+   * @returns the `p1` entry written to the ledger.
+   */
   async initializeCreatedSpace(
     spaceId: number,
     targetId: string,
@@ -120,12 +150,22 @@ export class PageLedgerStore {
     return { label, ...entry }
   }
 
-  /** Remove all Page-model state after its task space is finished or closed. */
+  /**
+   * Remove all Page-model state after its task space is finished or closed.
+   * @param spaceId - task space whose ledger document is deleted.
+   */
   async discard(spaceId: number): Promise<void> {
     assertSpaceId(spaceId)
     await rm(this.#path(spaceId), { force: true })
   }
 
+  /**
+   * Resolve one published label to its Page.
+   * @param spaceId - task space that owns the label.
+   * @param label - published label such as `p1`.
+   * @returns the managed page.
+   * @throws when the label is unknown, released, or closed.
+   */
   async getPage(spaceId: number, label: string): Promise<ManagedPage> {
     assertLabel(label)
     const ledger = await this.read(spaceId)
@@ -140,6 +180,14 @@ export class PageLedgerStore {
     throw new Error(`page label not found: ${label}`)
   }
 
+  /**
+   * Add a Page to the ledger under an explicit or automatic label.
+   * @param spaceId - task space that owns the new Page.
+   * @param targetId - native page target id.
+   * @param options - explicit label (`as`) and opener (`openedBy`).
+   * @returns the added page.
+   * @throws when the target is already managed or the label was used before.
+   */
   async addPage(
     spaceId: number,
     targetId: string,
@@ -174,6 +222,13 @@ export class PageLedgerStore {
     return added!
   }
 
+  /**
+   * Persist one Page's public ref state.
+   * @param spaceId - task space that owns the Page.
+   * @param label - published label such as `p1`.
+   * @param refs - ref state to store; it is validated before it is written.
+   * @throws when the label is unknown or the state fails validation.
+   */
   async setPageRefs(
     spaceId: number,
     label: string,
@@ -187,6 +242,13 @@ export class PageLedgerStore {
     })
   }
 
+  /**
+   * Remove a Page from the ledger, recording that its label was closed.
+   * @param spaceId - task space that owns the Page.
+   * @param label - published label such as `p1`.
+   * @returns the removed page entry.
+   * @throws when the label was never used, was released, or was closed already.
+   */
   async closePage(spaceId: number, label: string): Promise<ManagedPage> {
     assertLabel(label)
     let removed: ManagedPage
@@ -207,6 +269,13 @@ export class PageLedgerStore {
     return removed!
   }
 
+  /**
+   * Remove a Page from the ledger and keep its target as a user-owned tab.
+   * @param spaceId - task space that owns the Page.
+   * @param label - published label such as `p1`.
+   * @returns the removed page entry.
+   * @throws when the label was never used, was released, or was closed already.
+   */
   async releasePage(spaceId: number, label: string): Promise<ManagedPage> {
     assertLabel(label)
     let removed: ManagedPage
@@ -229,6 +298,13 @@ export class PageLedgerStore {
     return removed!
   }
 
+  /**
+   * Record a live tab the ledger preserves but does not manage.
+   * @param spaceId - task space the tab belongs to.
+   * @param targetId - native page target id.
+   * @param openedBy - who opened the tab; only `agent` and `unknown` are accepted.
+   * @throws when the target is already a managed Page or the origin is invalid.
+   */
   async keepUnmanaged(
     spaceId: number,
     targetId: string,
@@ -250,20 +326,36 @@ export class PageLedgerStore {
     })
   }
 
-  /** Mark the next reconciliation as crossing a user-control boundary. */
+  /**
+   * Mark the next reconciliation as crossing a user-control boundary.
+   * @param spaceId - task space that owns the boundary.
+   */
   async beginUserControl(spaceId: number): Promise<void> {
     await this.#update(spaceId, (ledger) => {
       ledger.userControlPending = true
     })
   }
 
-  /** Roll back a boundary marker when the native handoff itself fails. */
+  /**
+   * Roll back a boundary marker when the native handoff itself fails.
+   * @param spaceId - task space whose marker is cleared.
+   */
   async cancelUserControl(spaceId: number): Promise<void> {
     await this.#update(spaceId, (ledger) => {
       ledger.userControlPending = false
     })
   }
 
+  /**
+   * Reconcile the ledger with the tabs that are currently open. Entries for
+   * closed tabs are dropped; tabs the ledger has not seen stay unmanaged while
+   * a user-control boundary is pending, and are adopted as Agent Pages only
+   * when `autoAdoptNew` is set.
+   * @param spaceId - task space to reconcile.
+   * @param liveTargetIds - native page target ids currently open.
+   * @param options - adoption policy and an explicit boundary override.
+   * @returns the reconciled ledger, unchanged when nothing had to be applied.
+   */
   async reconcile(
     spaceId: number,
     liveTargetIds: Iterable<string>,

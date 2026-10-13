@@ -7,7 +7,14 @@ import { fileURLToPath } from 'node:url'
 const SRC_DIR = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(SRC_DIR, '..')
 
-export function agentWorkspace() {
+/**
+ * Resolve the ego-browser agent workspace: `EGO_BROWSER_AGENT_WORKSPACE` with
+ * a leading `~` expanded when set, otherwise the `agent-skills/ego-browser`
+ * directory beside this module when present, otherwise `skills/ego-browser` at
+ * the repository root.
+ * @returns Absolute workspace path; the last fallback is returned without an existence check.
+ */
+export function agentWorkspace(): string {
   if (process.env.EGO_BROWSER_AGENT_WORKSPACE) {
     return resolvePath(process.env.EGO_BROWSER_AGENT_WORKSPACE)
   }
@@ -37,7 +44,11 @@ function loadEnvFile(path) {
   loadNodeEnvFile(path)
 }
 
-export function loadEnv() {
+/**
+ * Load the repository root `.env` and the agent workspace `.env` into
+ * `process.env`; absent files are skipped.
+ */
+export function loadEnv(): void {
   loadEnvFile(resolve(REPO_ROOT, '.env'))
   loadEnvFile(resolve(agentWorkspace(), '.env'))
 }

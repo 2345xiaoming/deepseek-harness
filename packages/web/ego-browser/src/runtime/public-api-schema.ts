@@ -1,4 +1,5 @@
 // @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
+/** Accepted option kinds; each selects one validation rule in validateOptionValue. */
 export type PublicApiOptionKind =
   | 'boolean'
   | 'clip'
@@ -12,12 +13,14 @@ export type PublicApiOptionKind =
   | 'stringRecord'
   | 'point'
 
+/** One named option: its help description, validation kind, and allowed literal values when closed. */
 export type PublicApiOption = {
   description: string
   kind: PublicApiOptionKind
   values?: readonly string[]
 }
 
+/** One entry of the Agent-facing v2 surface: a name, its signature, a one-line summary, and its options. */
 export type PublicApiEntry = {
   name: string
   signature: string
@@ -237,7 +240,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     signature:
       'await page.snapshot({ scope?, root?, includeActionMarks?, includeStableLocator? })',
     summary:
-      'Return a semantic snapshot of the current viewport, full Page, or one snapshot-ref subtree with Page provenance.',
+      'Return a semantic snapshot of the current viewport, full Page, or one snapshot-ref subtree, tagging each ref with the Page or iframe that produced it.',
     options: {
       scope: option(
         'string',
@@ -655,11 +658,22 @@ const entriesByName = new Map(
   PUBLIC_API_SCHEMA.map(entry => [entry.name, entry]),
 )
 
+/**
+ * Look up one documented public API entry.
+ *
+ * @param name - schema name such as `Page.goto`.
+ * @returns the matching entry, or undefined for a legacy or unknown name.
+ */
 export function publicApiEntry(name: string): PublicApiEntry | undefined {
   return entriesByName.get(name)
 }
 
-/** Validate an option object using the same schema shown in help and docs. */
+/**
+ * Validate an option object using the same schema shown in help and docs.
+ *
+ * @param name - schema name whose options define the accepted keys.
+ * @param value - caller's option object; unknown keys and invalid values throw a TypeError.
+ */
 export function validatePublicApiOptions(name: string, value: unknown): void {
   const entry = publicApiEntry(name)
   if (!entry?.options) {

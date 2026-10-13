@@ -57,10 +57,19 @@ type EgoCdpCallbackRuntime = {
 }
 let callbackRuntime: EgoCdpCallbackRuntime | undefined
 
+/**
+ * A CDP command whose response did not arrive within its deadline. The pending
+ * entry is dropped before the error is reported, so a later call of the same
+ * method starts a fresh request.
+ */
 export class CdpRequestTimeoutError extends Error {
+  /** Stable error code carried across the native bridge. */
   readonly code = 'EGO_CDP_REQUEST_TIMEOUT'
+  /** CDP method whose response timed out. */
   readonly method: string
+  /** Deadline applied to the command, in milliseconds. */
   readonly timeoutMs: number
+  /** Attached target session the command was addressed to, when known. */
   readonly sessionId?: string
 
   constructor(method: string, timeoutMs: number, sessionId?: string) {
@@ -72,6 +81,12 @@ export class CdpRequestTimeoutError extends Error {
   }
 }
 
+/**
+ * Whether a rejection is a CDP deadline failure. The error code is also
+ * matched, so errors from another realm or a serialized boundary classify.
+ * @param error - the rejection or thrown value to classify.
+ * @returns true when the value is a {@link CdpRequestTimeoutError}.
+ */
 export function isCdpRequestTimeoutError(
   error: unknown,
 ): error is CdpRequestTimeoutError {
@@ -86,12 +101,22 @@ export function isCdpRequestTimeoutError(
 /** A CDP command error carrying the session it was addressed to. */
 export type CdpCommandError = Error & { sessionId?: string }
 
-/** The CDP session that issued a failed command is gone. */
+/**
+ * Whether a CDP failure means the session that issued the command no longer
+ * exists, for example after the target detached or closed.
+ * @param error - the rejection or thrown value to classify.
+ * @returns true when the error message matches a lost-session signature.
+ */
 export function isSessionLostError(error: unknown): error is CdpCommandError {
   return error instanceof Error && SESSION_LOST.test(error.message)
 }
 
-/** A frame or iframe target vanished between enumeration and use. */
+/**
+ * Whether a CDP failure means a frame or iframe target vanished between
+ * enumeration and use.
+ * @param error - the rejection or thrown value to classify.
+ * @returns true when the error message matches a lost-frame signature.
+ */
 export function isFrameLifecycleError(
   error: unknown,
 ): error is CdpCommandError {
@@ -101,6 +126,8 @@ export function isFrameLifecycleError(
 /**
  * A frame or its session disappeared mid-operation. Callers that have not yet
  * dispatched input may rediscover frame sessions and retry.
+ * @param error - the rejection or thrown value to classify.
+ * @returns true when the failure is a lost session or a lost frame.
  */
 export function isRetryableFrameLifecycleError(
   error: unknown,
@@ -114,9 +141,13 @@ export function isRetryableFrameLifecycleError(
  * expose it in an action receipt or surface this error to the caller.
  */
 export class PageDialogOpenedError extends Error {
+  /** Stable error code carried across the native bridge. */
   readonly code = 'EGO_PAGE_DIALOG_OPENED'
+  /** CDP method the open dialog prevented from completing. */
   readonly method: string
+  /** Session whose Page owns the open dialog. */
   readonly sessionId: string
+  /** Copy of the `Page.javascriptDialogOpening` params for the open dialog. */
   readonly dialog: Record<string, unknown>
 
   constructor(
@@ -146,6 +177,12 @@ export class PageDialogOpenedError extends Error {
   }
 }
 
+/**
+ * Whether a rejection is an open-dialog failure. The error code is also
+ * matched, so errors from another realm or a serialized boundary classify.
+ * @param error - the rejection or thrown value to classify.
+ * @returns true when the value is a {@link PageDialogOpenedError}.
+ */
 export function isPageDialogOpenedError(
   error: unknown,
 ): error is PageDialogOpenedError {
@@ -157,12 +194,22 @@ export function isPageDialogOpenedError(
   )
 }
 
+/**
+ * Params of one `Page.fileChooserOpened` event, narrowed to the fields the
+ * interception needs: the chooser's node and, when reported, its frame and mode.
+ */
 export type FileChooserOpenedEvent = {
   backendNodeId: number
   frameId?: string
   mode?: 'selectSingle' | 'selectMultiple'
 }
 
+/**
+ * Handle to one armed file-chooser interception, owned by the caller that
+ * prepared it. `ready` resolves once Chromium suppresses the native picker;
+ * `event` resolves with the next opened chooser; `dispose` disarms the
+ * interception and rejects a still-pending `event` with its reason.
+ */
 export type FileChooserInterception = {
   ready: Promise<void>
   event: Promise<FileChooserOpenedEvent>
@@ -347,13 +394,23 @@ function capEvents(events) {
   }
 }
 
-export function isBrowserRuntime() {
+/**
+ * Whether this module runs where the native bridge exposes
+ * `ego.sendCDPMessage`.
+ * @returns true when the embedded browser bridge is available.
+ */
+export function isBrowserRuntime(): boolean {
   return Boolean(
     globalThis.ego && typeof globalThis.ego.sendCDPMessage === 'function',
   )
 }
 
-export function browserEgo() {
+/**
+ * The native bridge handle for the current runtime.
+ * @returns the `globalThis.ego` object that exposes `sendCDPMessage` and the task-space calls.
+ * @throws when no embedded browser runtime is installed.
+ */
+export function browserEgo(): any {
   if (!globalThis.ego) {
     throw new Error('browser runtime is not available')
   }
@@ -392,7 +449,11 @@ function bindRuntimeCallbacks(runtime: EgoCdpCallbackRuntime): void {
   callbackRuntime = runtime
 }
 
-/** Release only callbacks installed by this runtime, preserving foreign owners. */
+/**
+ * Release only the CDP callbacks this runtime installed, leaving callbacks
+ * owned by another embedder in place.
+ * @param runtime - the runtime to unbind; defaults to the runtime bound by the last CDP request.
+ */
 export function releaseRuntimeCallbacks(
   runtime: EgoCdpCallbackRuntime | undefined = callbackRuntime,
 ): void {
@@ -406,7 +467,11 @@ export function releaseRuntimeCallbacks(
   if (callbackRuntime === runtime) callbackRuntime = undefined
 }
 
-/** Stop all runtime work before an embedded Node context is discarded. */
+/**
+ * Stop all runtime work before an embedded Node context is discarded: unbind the
+ * callbacks, fail every pending request, and clear subscribers and sessions.
+ * @param runtime - the runtime to unbind; defaults to the runtime bound by the last CDP request.
+ */
 export function disposeBrowserRuntime(
   runtime: EgoCdpCallbackRuntime | undefined = callbackRuntime,
 ): void {
@@ -417,7 +482,11 @@ export function disposeBrowserRuntime(
   invalidateSession()
 }
 
-/** Subscribe to Target/Browser events without consuming the legacy event queue. */
+/**
+ * Subscribe to Target/Browser events without consuming the legacy event queue.
+ * @param listener - called for every browser-level CDP event.
+ * @returns a disposer that removes the listener.
+ */
 export function subscribeBrowserEvents(
   listener: (event: any) => void,
 ): () => void {
@@ -428,7 +497,12 @@ export function subscribeBrowserEvents(
   return () => browserEventSubscribers.delete(listener)
 }
 
-/** Subscribe to session events for one browser target. */
+/**
+ * Subscribe to session events for one browser target.
+ * @param targetId - target whose session events to observe.
+ * @param listener - called for every CDP event routed to that target.
+ * @returns a disposer that removes the listener and drops the target's subscriber set once it is empty.
+ */
 export function subscribePageEvents(
   targetId: string,
   listener: (event: any) => void,
@@ -505,12 +579,24 @@ function rawCdp(
   })
 }
 
+/**
+ * Send one CDP command, attaching the current Page session unless the caller
+ * names one or the browser process answers the method on its own. A lost
+ * session is re-established once and the command replayed; a dialog-blocked
+ * command fails fast with {@link PageDialogOpenedError} instead of waiting for
+ * the transport deadline.
+ * @param method - CDP method name, for example `Runtime.evaluate`.
+ * @param params - method parameters; defaults to none.
+ * @param sessionId - explicit target session; omit to use the current Page.
+ * @param timeoutMs - response deadline in milliseconds.
+ * @returns the CDP response message.
+ */
 export async function browserCdp(
   method,
   params: any = {},
   sessionId = undefined,
   timeoutMs = RESPONSE_TIMEOUT_MS,
-) {
+): Promise<any> {
   // Test mock: cdpOverride bypasses everything including session injection.
   // Include the effective timeout so tests can verify timing contracts without
   // waiting for a real CDP deadline.
@@ -584,10 +670,20 @@ function recordCommandState(method, params, sessionId, response) {
   }
 }
 
+/**
+ * Return the live session for a Page target, attaching one when none is cached
+ * or the cached session is older than the reuse window. Page events, network
+ * tracking, and OOPIF auto-attach are enabled before the session is returned;
+ * concurrent callers for one target share a single attach.
+ * @param requestedTargetId - target to attach; defaults to the preferred or last-used target, else the active tab.
+ * @param timeoutMs - per-request deadline in milliseconds.
+ * @returns the attached session id.
+ * @throws when no tab is available to attach.
+ */
 export async function ensureSession(
   requestedTargetId = undefined,
   timeoutMs = RESPONSE_TIMEOUT_MS,
-) {
+): Promise<any> {
   const cachedTargetId =
     requestedTargetId || state.preferredTargetId || defaultTargetId
   const cached = cachedTargetId ? targetStates.get(cachedTargetId) : undefined
@@ -657,11 +753,14 @@ export async function ensureSession(
  * Standard CDP reports an iframe target's parent as a frame id. The frame tree
  * and target metadata together recover the nearest Page/OOPIF target ancestor
  * without admitting unrelated iframe targets.
+ * @param pageTargetId - the top-level Page target whose OOPIF frames to attach.
+ * @param timeoutMs - deadline shared by the discovery and attach commands, in milliseconds.
+ * @returns frame id → session id for the Page and every live OOPIF below it, plus `parentFrameIds` naming each frame's parent.
  */
 export async function ensureFrameSessions(
   pageTargetId: string,
   timeoutMs = RESPONSE_TIMEOUT_MS,
-) {
+): Promise<Map<string, string> & { parentFrameIds?: ReadonlyMap<string, string | undefined> }> {
   if (typeof pageTargetId !== 'string' || pageTargetId.length === 0) {
     throw new TypeError('ensureFrameSessions requires a non-empty targetId')
   }
@@ -840,7 +939,13 @@ export async function ensureFrameSessions(
   return sessions
 }
 
-export function invalidateSession(targetId = undefined) {
+/**
+ * Drop cached sessions, per-target state, and buffered events for one target
+ * subtree, or for every known target when no id is given. The next CDP command
+ * attaches a fresh session.
+ * @param targetId - target subtree to clear; omit to clear all targets.
+ */
+export function invalidateSession(targetId = undefined): void {
   if (targetId) {
     clearTargetSessionTree(targetId, { remove: true })
     return
@@ -855,15 +960,27 @@ export function invalidateSession(targetId = undefined) {
   resetUserControlProbe()
 }
 
-export function setPreferredTarget(targetId) {
+/**
+ * Prefer one target for implicit session attachment, for example after the user
+ * switches tabs.
+ * @param targetId - target to prefer; a falsy value clears the preference.
+ */
+export function setPreferredTarget(targetId): void {
   state.preferredTargetId = targetId || null
 }
 
-export function clearPreferredTarget() {
+/** Clear the preferred target so implicit attachment follows the active tab again. */
+export function clearPreferredTarget(): void {
   state.preferredTargetId = null
 }
 
-export function drainBrowserEvents(sessionId = undefined) {
+/**
+ * Take every buffered event: browser-level events plus the events of the
+ * selected or preferred target.
+ * @param sessionId - session whose target events to include; omit for the preferred or last-used target.
+ * @returns the drained CDP messages in arrival order.
+ */
+export function drainBrowserEvents(sessionId = undefined): any[] {
   const targetId = sessionId
     ? sessionTargets.get(sessionId)
     : state.preferredTargetId || defaultTargetId
@@ -873,8 +990,12 @@ export function drainBrowserEvents(sessionId = undefined) {
   return out
 }
 
-/** Drain only events routed to one Page session. */
-export function drainPageEvents(sessionId) {
+/**
+ * Drain only events routed to one Page session.
+ * @param sessionId - session whose target events to drain.
+ * @returns the drained CDP messages, or an empty array for an unknown session.
+ */
+export function drainPageEvents(sessionId): any[] {
   const targetId = sessionId ? sessionTargets.get(sessionId) : undefined
   const target = targetId ? targetStates.get(targetId) : undefined
   return target ? target.events.splice(0, target.events.length) : []
@@ -885,8 +1006,10 @@ export function drainPageEvents(sessionId) {
  * OOPIF session reports its top-level Page's dialog: Chromium delivers every
  * dialog event on the Page session, and a dialog opened by any frame stalls
  * that frame's renderer.
+ * @param sessionId - session whose Page dialog to report; omit for the preferred or last-used target.
+ * @returns a copy of the open dialog's `Page.javascriptDialogOpening` params, or null when no dialog is open.
  */
-export function pendingDialog(sessionId) {
+export function pendingDialog(sessionId): Record<string, unknown> | null {
   const targetId = sessionId
     ? sessionTargets.get(sessionId)
     : state.preferredTargetId || defaultTargetId
@@ -896,14 +1019,24 @@ export function pendingDialog(sessionId) {
   return dialog ? { ...dialog } : null
 }
 
-export function isNetworkDomainEnabled(sessionId) {
+/**
+ * Whether Network events are enabled on the target that owns a session.
+ * @param sessionId - session to inspect.
+ * @returns true when that session's target has the Network domain enabled.
+ */
+export function isNetworkDomainEnabled(sessionId): boolean {
   const targetId = sessionId ? sessionTargets.get(sessionId) : undefined
   return targetId
     ? Boolean(targetStates.get(targetId)?.networkDomainEnabled)
     : false
 }
 
-/** Ensure Network events are available on every selected Page/OOPIF session. */
+/**
+ * Ensure Network events are available on every selected Page/OOPIF session.
+ * @param sessionIds - sessions to enable; duplicates and falsy ids are ignored.
+ * @param timeoutMs - per-request deadline in milliseconds.
+ * @throws when a listed session is already detached.
+ */
 export async function ensureNetworkTracking(
   sessionIds: string[],
   timeoutMs = RESPONSE_TIMEOUT_MS,
@@ -916,7 +1049,11 @@ export async function ensureNetworkTracking(
   )
 }
 
-/** Read continuous network state without consuming the public Page event queue. */
+/**
+ * Read continuous network state without consuming the public Page event queue.
+ * @param sessionIds - sessions to aggregate.
+ * @returns whether every session is tracked, the combined in-flight request count, and the newest activity timestamp.
+ */
 export function networkActivity(sessionIds: string[]): {
   tracking: boolean
   inflight: number
@@ -942,7 +1079,13 @@ export function networkActivity(sessionIds: string[]): {
   return { tracking, inflight, lastActivityAt }
 }
 
-/** Refresh and return the main and known OOPIF sessions for one Page. */
+/**
+ * Refresh and return the main and known OOPIF sessions for one Page.
+ * @param sessionId - any session of the Page whose frame tree to refresh.
+ * @param timeoutMs - deadline shared by the refresh commands, in milliseconds.
+ * @returns the current main session first, then each known frame session of the Page.
+ * @throws when the session is detached, or when the Page re-attached mid-refresh.
+ */
 export async function pageNetworkSessions(
   sessionId: string,
   timeoutMs = RESPONSE_TIMEOUT_MS,
@@ -965,11 +1108,16 @@ export async function pageNetworkSessions(
  * Suppress the operating-system file picker and observe the next chooser in
  * one Page session. The caller owns the short-lived interception and must
  * dispose it after setting files or completing an input action.
+ * @param sessionId - Page session whose file chooser to intercept.
+ * @param options - `timeoutMs` bounds the wait for the chooser; `cancel` completes
+ *   an intercepted chooser with an empty file list instead of opening the picker.
+ * @returns the interception handle; its `event` resolves with the next opened chooser and rejects on timeout or disposal.
  */
 export function prepareFileChooser(
   sessionId: string,
-  { timeoutMs, cancel }: { timeoutMs: number; cancel: boolean },
+  options: { timeoutMs: number; cancel: boolean },
 ): FileChooserInterception {
+  const { timeoutMs, cancel } = options
   const targetId = sessionTargets.get(sessionId)
   const target = targetId ? targetStates.get(targetId) : undefined
   if (!target) {
@@ -1561,7 +1709,14 @@ function rejectFileChooserInterception(target, error: Error) {
   interception.reject(error)
 }
 
-export function browserSnapshotRefsToRefMap(refMap, refs = []) {
+/**
+ * Replace a ref map from snapshot ref entries, keeping each entry's frame id so
+ * a ref stays usable only in the frame that produced it. Entries without a
+ * backendNodeId are skipped.
+ * @param refMap - the ref map to clear and refill.
+ * @param refs - snapshot ref entries to load.
+ */
+export function browserSnapshotRefsToRefMap(refMap, refs = []): void {
   refMap.clear()
   for (const ref of refs) {
     if (!ref || typeof ref !== 'object') {

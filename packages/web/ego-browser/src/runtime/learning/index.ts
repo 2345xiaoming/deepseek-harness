@@ -34,8 +34,11 @@ export {
 } from './validate-learning-format.ts'
 
 /**
- * Load learned context for a given URL.
- * Returns site knowledge (notes content, available tools, selector hints).
+ * Load learned context for a given URL: matched site skills, the text of their
+ * notes, and their tool signatures.
+ * @param url - page URL or bare hostname to look up.
+ * @param options - root override and agent workspace forwarded to siteSkillsForUrl.
+ * @returns the matched context, or an empty context with `exists: false` when no skill matches.
  */
 export async function loadLearnedContext(
   url: string,
@@ -122,6 +125,13 @@ function isLearningNotePath(siteDir: string, notePath: string) {
   )
 }
 
+/**
+ * Find the site skill whose manifest declares the given id.
+ * @param siteId - manifest `id` to match, not the directory name.
+ * @param options - root override and agent workspace used to locate the site skills root.
+ * @returns the skill's directory and parsed manifest.
+ * @throws when no site skill declares the id; the error names the searched root and workspace override.
+ */
 export async function findSiteSkill(
   siteId: string,
   options: any = {},
@@ -136,13 +146,23 @@ export async function findSiteSkill(
   throw siteSkillNotFoundError(siteId, root)
 }
 
+/**
+ * Run one Node site tool declared by a site skill.
+ * @param siteId - site skill id that declares the tool.
+ * @param toolName - tool name in the skill's nodeTools map.
+ * @param args - arguments object passed to the callable.
+ * @param ctx - host context given to the callable as its first argument.
+ * @param options - root override and agent workspace used to locate the site skills root.
+ * @returns whatever the tool callable resolves to.
+ * @throws when the skill, tool, callable, or tool path is missing or escapes the skill directory.
+ */
 export async function runNodeSiteTool(
   siteId,
   toolName,
   args: any = {},
   ctx,
   options: any = {},
-) {
+): Promise<any> {
   const { siteDir, manifest } = await findSiteSkill(siteId, options)
   const schema = toolSchemas(manifest, 'nodeTools')[toolName]
   if (!schema || typeof schema !== 'object') {
@@ -169,11 +189,20 @@ export async function runNodeSiteTool(
   return tool(ctx, args || {})
 }
 
+/**
+ * Read one browser site tool's source file, which the caller wraps and evaluates
+ * in the page.
+ * @param siteId - site skill id that declares the tool.
+ * @param toolName - tool name in the skill's browserTools map.
+ * @param options - root override and agent workspace used to locate the site skills root.
+ * @returns the tool file's text.
+ * @throws when the skill, tool, or tool path is missing or escapes the skill directory.
+ */
 export async function loadBrowserToolSource(
   siteId,
   toolName,
   options: any = {},
-) {
+): Promise<string> {
   const { siteDir, manifest } = await findSiteSkill(siteId, options)
   const schema = toolSchemas(manifest, 'browserTools')[toolName]
   if (!schema || typeof schema !== 'object') {
@@ -185,7 +214,13 @@ export async function loadBrowserToolSource(
   return readFile(toolPath, 'utf8')
 }
 
-export function wrapBrowserTool(source, args: any = {}) {
+/**
+ * Wrap a browser tool's source as an async IIFE called with a JSON copy of `args`.
+ * @param source - the tool's source text, expected to be a function expression.
+ * @param args - arguments serialized into the call; defaults to an empty object.
+ * @returns the expression to evaluate in the page.
+ */
+export function wrapBrowserTool(source, args: any = {}): string {
   return `(async () => { const __egoBrowserTool = ${source}; return await __egoBrowserTool(${JSON.stringify(args || {})}); })()`
 }
 

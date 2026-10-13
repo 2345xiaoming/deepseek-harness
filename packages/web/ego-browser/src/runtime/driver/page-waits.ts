@@ -17,6 +17,8 @@ const FRAME_DISCOVERY_REFRESH_INTERVAL_MS = 500
  * An element failure worth another resolution attempt: the resolver reported a
  * transient state, or a frame vanished mid-resolution. Session loss is not
  * included; callers decide whether the lost session was the Page itself.
+ * @param error - the failure raised while resolving or acting on an element.
+ * @returns true when the caller may retry resolution; narrows `error` to `Error`.
  */
 export function isTransientElementError(error: unknown): error is Error {
   return (
@@ -46,47 +48,75 @@ type PageWaitServices = {
   sleep(ms: number): Promise<void>
 }
 
+/** Budget and required element state for one selector wait inside a Page session. */
 export type PageWaitForSelectorOptions = {
+  /** Wait budget in milliseconds; defaults to 10 000. */
   timeout?: number
+  /** State the element must reach; defaults to `'visible'`. */
   state?: 'attached' | 'detached' | 'visible' | 'hidden'
 }
 
+/** Budget and quiescence window for one load-state wait inside a Page session. */
 export type PageWaitForLoadStateOptions = {
+  /** Wait budget in milliseconds; defaults to 10 000. */
   timeout?: number
+  /** Network-quiescence window in milliseconds for `'networkidle'`; defaults to 500. */
   idleMs?: number
 }
 
+/** Browser lifecycle boundary that resolves a navigation or load-state wait. */
 export type PageGotoWaitUntil =
   | 'commit'
   | 'domcontentloaded'
   | 'load'
   | 'networkidle'
 
+/** One navigation request: its total budget, lifecycle boundary, and optional referer. */
 export type PageNavigationOptions = {
+  /** Budget in milliseconds covering navigate, commit, and the load-state wait. */
   timeoutMs: number
+  /** Lifecycle boundary that resolves the navigation. */
   waitUntil: PageGotoWaitUntil
+  /** Value sent as the `Page.navigate` referrer. */
   referer?: string
 }
 
+/** Wait budget for one URL wait. */
 export type PageWaitForURLOptions = {
+  /** Wait budget in milliseconds; defaults to 10 000. */
   timeout?: number
 }
 
+/** A URL expectation: a glob string, a regular expression, or a predicate over the parsed URL. */
 export type PageURLMatcher = string | RegExp | ((url: URL) => boolean)
 
+/** Per-poll callback that can end a URL wait with its own failure. */
 export type PageWaitForURLHooks = {
+  /** Called after each URL probe; return an error to abort the wait. */
   interrupt?: (
     lastUrl: string,
     matches: (url: string) => boolean,
   ) => Error | undefined
 }
 
+/**
+ * Thrown when a Page navigation misses its deadline. `committed` separates a
+ * document that committed but never reached the requested lifecycle boundary
+ * from one that never committed, and `url`/`readyState` report the document
+ * observed at the deadline.
+ */
 export class PageNavigationTimeoutError extends Error {
+  /** Stable error code identifying a navigation timeout. */
   readonly code = 'EGO_NAVIGATION_TIMEOUT'
+  /** Whether the requested document committed before the deadline. */
   readonly committed: boolean
+  /** URL of the document observed at the deadline, when it was readable. */
   readonly url?: string
+  /** `document.readyState` observed at the deadline, when it was readable. */
   readonly readyState?: string
+  /** Lifecycle boundary the navigation was waiting for. */
   readonly waitUntil: PageGotoWaitUntil
+  /** Expired wait budget in milliseconds. */
   readonly timeoutMs: number
 
   constructor(
@@ -112,7 +142,20 @@ export class PageNavigationTimeoutError extends Error {
 const VISIBILITY_FUNCTION =
   "function(){if(typeof this.checkVisibility==='function')return this.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});const s=getComputedStyle(this);const r=this.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0'&&r.width>0&&r.height>0;}"
 
-/** Wait for a selector inside one explicit Page session. */
+/**
+ * Wait for a selector inside one explicit Page session, polling until the
+ * element reaches the requested state and re-enumerating iframe sessions so a
+ * late frame is still searched. A missing element satisfies `'detached'` and
+ * `'hidden'`; a lost iframe session is rediscovered, while a lost Page session
+ * is rethrown. An empty selector is rejected with `TypeError`.
+ * @param services - Page services supplying CDP, the clock, and sleeping.
+ * @param sessionId - the Page session the selector is resolved in.
+ * @param refMap - refs held for this Page, consulted before selector matching.
+ * @param selector - CSS selector, `@ref`, `loc=`, or `xpath=` expression.
+ * @param options - wait budget and required element state.
+ * @param getIframeSessions - enumerates iframe sessions to search, bounded by the remaining budget.
+ * @returns true once the element reaches the requested state.
+ */
 export async function waitForSelectorInPage(
   services: PageWaitServices,
   sessionId: string,
@@ -225,7 +268,18 @@ function isRetryableSelectorWaitError(
   )
 }
 
-/** Wait until one Page URL matches an exact string, glob, RegExp, or predicate. */
+/**
+ * Wait until one Page URL matches an exact string, glob, RegExp, or predicate.
+ * Every poll evaluates `location.href` and then offers the value to
+ * `hooks.interrupt`, which can end the wait with its own error; a predicate must
+ * return a boolean synchronously. An expired budget throws with the matcher
+ * description and the last observed URL.
+ * @param services - Page services supplying CDP, the clock, and sleeping.
+ * @param sessionId - the Page session whose URL is polled.
+ * @param expected - string glob, RegExp, or predicate the URL must satisfy.
+ * @param options - wait budget in milliseconds; defaults to 10 000.
+ * @param hooks - optional interruption hook called after each poll.
+ */
 export async function waitForURLInPage(
   services: PageWaitServices,
   sessionId: string,
@@ -420,7 +474,17 @@ function invalidURLGlobError(glob: string, reason: string): TypeError {
   return new TypeError(`Invalid URL glob ${JSON.stringify(glob)}: ${reason}`)
 }
 
-/** Navigate one Page and wait for the selected state of this navigation. */
+/**
+ * Navigate one Page and wait for the selected state of this navigation. Network
+ * tracking starts before `Page.navigate` when the target is `'networkidle'`;
+ * commit is awaited first, and the load state afterwards unless the target is
+ * `'commit'`. An expired budget throws `PageNavigationTimeoutError` carrying
+ * whether the document committed and the state observed at the deadline.
+ * @param services - Page services supplying CDP, the clock, and network tracking.
+ * @param sessionId - the Page session to navigate.
+ * @param url - URL to load.
+ * @param options - navigation budget, lifecycle boundary, and optional referer.
+ */
 export async function navigateInPage(
   services: PageWaitServices,
   sessionId: string,
@@ -503,7 +567,14 @@ export async function navigateInPage(
   }
 }
 
-/** Reload one Page and wait for the selected state of the new document. */
+/**
+ * Reload one Page and wait for the selected state of the new document. The main
+ * frame is read first so the wait can detect the new loader id, then commit is
+ * awaited, and the load state afterwards unless the target is `'commit'`.
+ * @param services - Page services supplying CDP, the clock, and network tracking.
+ * @param sessionId - the Page session to reload.
+ * @param options - reload budget and lifecycle boundary.
+ */
 export async function reloadInPage(
   services: PageWaitServices,
   sessionId: string,
@@ -774,7 +845,17 @@ function isLoadStateTimeout(error: unknown): boolean {
   )
 }
 
-/** Wait for document load or network idle inside one Page session. */
+/**
+ * Wait for document load or network idle inside one Page session.
+ * `'networkidle'` re-enumerates the Page's network sessions on every poll so a
+ * new OOPIF starts tracking before the Page can look idle, then resolves once no
+ * request is in flight for the idle window. Other states are rejected with
+ * `TypeError`.
+ * @param services - Page services supplying CDP, the clock, and network tracking.
+ * @param sessionId - the Page session whose document is observed.
+ * @param state - lifecycle state to await.
+ * @param options - wait budget and network-idle window.
+ */
 export async function waitForLoadStateInPage(
   services: PageWaitServices,
   sessionId: string,

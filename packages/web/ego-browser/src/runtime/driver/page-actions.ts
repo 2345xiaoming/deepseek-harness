@@ -26,8 +26,14 @@ type PageActionServices = {
   platform?: string
 }
 
+/** Mouse button accepted by Page pointer actions. */
 export type MouseButton = 'left' | 'middle' | 'right'
 
+/**
+ * Options for one element click. `position` is a CSS-pixel offset from the
+ * element's top-left corner, `force` bypasses pointer-interception checks, and
+ * `timeout` bounds the wait for the element to become usable.
+ */
 export type PageClickOptions = {
   button?: MouseButton
   clickCount?: number
@@ -38,11 +44,20 @@ export type PageClickOptions = {
   label?: string
 }
 
+/**
+ * Options for one fill: `clearFirst` replaces the current value (default true)
+ * and `timeout` bounds the wait for the element to become usable.
+ */
 export type PageFillOptions = {
   clearFirst?: boolean
   timeout?: number
 }
 
+/**
+ * One option to select: a string matched against the option's value or label,
+ * or an object whose named fields (`value`, `label`, zero-based `index`) must
+ * all match.
+ */
 export type PageSelectOption =
   | string
   | {
@@ -51,7 +66,19 @@ export type PageSelectOption =
     index?: number
   }
 
-/** Select option values from one visible, enabled select element. */
+/**
+ * Select option values from one visible, enabled select element. Replaces the
+ * current selection and dispatches `input` and `change`; throws
+ * ElementResolutionError when the element is transiently unusable or a choice
+ * matches no option.
+ * @param services - CDP transport plus sleep and agent-display hooks for the target session.
+ * @param sessionId - Page session that owns the select element.
+ * @param refMap - Snapshot ref map used to resolve `@N` refs.
+ * @param selector - `@N` ref, `loc=...`, `xpath=...`, or CSS selector for the select element.
+ * @param choices - Options to select; matching stops once a single-select is satisfied.
+ * @param iframeSessions - Frame id to CDP session map for iframe traversal.
+ * @returns the values of the options left selected, in document order.
+ */
 export async function selectOptionInPage(
   services: PageActionServices,
   sessionId: string,
@@ -177,6 +204,10 @@ export async function selectOptionInPage(
   }
 }
 
+/**
+ * Options for one hover. `position` is a CSS-pixel offset from the element's
+ * top-left corner and `force` bypasses hit-target checks.
+ */
 export type PageHoverOptions = {
   position?: { x: number; y: number }
   force?: boolean
@@ -184,6 +215,11 @@ export type PageHoverOptions = {
   label?: string
 }
 
+/**
+ * Options for one drag. `sourcePosition` and `targetPosition` are CSS-pixel
+ * offsets from each element's top-left corner, and `force` bypasses hit-target
+ * checks.
+ */
 export type PageDragAndDropOptions = {
   button?: MouseButton
   sourcePosition?: { x: number; y: number }
@@ -193,6 +229,10 @@ export type PageDragAndDropOptions = {
   label?: string
 }
 
+/**
+ * Options for a click at viewport coordinates: button, click count, and the
+ * `delay` in milliseconds between press and release.
+ */
 export type PageMouseClickOptions = {
   button?: MouseButton
   clickCount?: number
@@ -200,16 +240,22 @@ export type PageMouseClickOptions = {
   label?: string
 }
 
+/**
+ * Options for one mouse press or release: the button to act on and the click
+ * count reported to the page.
+ */
 export type PageMouseButtonOptions = {
   button?: MouseButton
   clickCount?: number
 }
 
+/** Options for one mouse move: `steps` interpolated events and a display-only `label`. */
 export type PageMouseMoveOptions = {
   steps?: number
   label?: string
 }
 
+/** Options for one wheel action: only a display-only action `label`. */
 export type PageMouseWheelOptions = {
   label?: string
 }
@@ -231,7 +277,18 @@ type FillOutcome =
   | 'appended'
   | 'unchanged'
 
-/** Click an element through one explicit target session and Page ref map. */
+/**
+ * Click an element through one explicit target session and Page ref map.
+ * Moving into a same-process iframe re-translates the point before pressing,
+ * and the resolved element handle is released in all cases.
+ * @param services - CDP transport plus sleep and agent-display hooks for the target session.
+ * @param sessionId - Page session used to resolve the selector.
+ * @param refMap - Snapshot ref map used to resolve `@N` refs.
+ * @param selector - `@N` ref, `loc=...`, `xpath=...`, or CSS selector for the element.
+ * @param options - Button, click count, delay, position, force, and display label.
+ * @param modifiers - Keyboard modifier bit mask applied to every dispatched event.
+ * @param iframeSessions - Frame id to CDP session map for iframe traversal.
+ */
 export async function clickInPage(
   services: PageActionServices,
   sessionId: string,
@@ -385,7 +442,19 @@ export async function clickInPage(
   }
 }
 
-/** Focus, replace, and notify an input-like element in one target session. */
+/**
+ * Focus, replace, and notify an input-like element in one target session.
+ * Retries the fill once through a real click when the control appends or drops
+ * the text, then throws an error naming the failure so the caller can fall
+ * back to `page.keyboard`; the resolved handles are released in all cases.
+ * @param services - CDP transport plus sleep and agent-display hooks for the target session.
+ * @param sessionId - Page session used to resolve the selector.
+ * @param refMap - Snapshot ref map used to resolve `@N` refs.
+ * @param selector - `@N` ref, `loc=...`, `xpath=...`, or CSS selector for the field.
+ * @param value - Text to write into the field.
+ * @param options - `clearFirst` replacement behavior and the element-wait timeout.
+ * @param iframeSessions - Frame id to CDP session map for iframe traversal.
+ */
 export async function fillInPage(
   services: PageActionServices,
   sessionId: string,
@@ -653,7 +722,16 @@ async function resolveFillActionTarget(
   return targetObjectId
 }
 
-/** Focus one strictly resolved element in an explicit Page session. */
+/**
+ * Focus one strictly resolved element in an explicit Page session, retargeting
+ * to its nearest focusable ancestor or unique editable descendant. Throws
+ * ElementResolutionError when no candidate takes focus.
+ * @param services - CDP transport plus sleep and agent-display hooks for the target session.
+ * @param sessionId - Page session used to resolve the selector.
+ * @param refMap - Snapshot ref map used to resolve `@N` refs.
+ * @param selector - `@N` ref, `loc=...`, `xpath=...`, or CSS selector for the element.
+ * @param iframeSessions - Frame id to CDP session map for iframe traversal.
+ */
 export async function focusInPage(
   services: PageActionServices,
   sessionId: string,
@@ -1016,7 +1094,17 @@ async function assertSafeFillActivationTarget(
   }
 }
 
-/** Move the native mouse over one element in an explicit Page session. */
+/**
+ * Move the native mouse over one element in an explicit Page session. The
+ * resolved element handle is released in all cases.
+ * @param services - CDP transport plus sleep and agent-display hooks for the target session.
+ * @param sessionId - Page session used to resolve the selector.
+ * @param refMap - Snapshot ref map used to resolve `@N` refs.
+ * @param selector - `@N` ref, `loc=...`, `xpath=...`, or CSS selector for the element.
+ * @param options - Position, force, timeout, and display label.
+ * @param modifiers - Keyboard modifier bit mask applied to the dispatched event.
+ * @param iframeSessions - Frame id to CDP session map for iframe traversal.
+ */
 export async function hoverInPage(
   services: PageActionServices,
   sessionId: string,
@@ -1067,7 +1155,19 @@ export async function hoverInPage(
   }
 }
 
-/** Drag between two elements through the same explicit Page session. */
+/**
+ * Drag between two elements through the same explicit Page session: press on
+ * the source, move to the target point, and release there with fixed pauses
+ * between events. Both resolved handles are released in all cases.
+ * @param services - CDP transport plus sleep and agent-display hooks for the target session.
+ * @param sessionId - Page session used to resolve both selectors.
+ * @param refMap - Snapshot ref map used to resolve `@N` refs.
+ * @param sourceSelector - `@N` ref, `loc=...`, `xpath=...`, or CSS selector for the drag source.
+ * @param targetSelector - `@N` ref, `loc=...`, `xpath=...`, or CSS selector for the drop target.
+ * @param options - Button, per-element positions, force, timeout, and display label.
+ * @param modifiers - Keyboard modifier bit mask applied to every dispatched event.
+ * @param iframeSessions - Frame id to CDP session map for iframe traversal.
+ */
 export async function dragAndDropInPage(
   services: PageActionServices,
   sessionId: string,
@@ -1180,7 +1280,16 @@ export async function dragAndDropInPage(
   }
 }
 
-/** Dispatch a complete native click at viewport coordinates. */
+/**
+ * Dispatch a complete native click at viewport coordinates.
+ * @param services - CDP transport plus sleep and agent-display hooks for the target session.
+ * @param sessionId - Page session that receives the input events.
+ * @param x - Viewport x coordinate in CSS pixels.
+ * @param y - Viewport y coordinate in CSS pixels.
+ * @param options - Button, click count, delay, and display label.
+ * @param modifiers - Keyboard modifier bit mask applied to every dispatched event.
+ * @param baseButtons - Buttons already held down, kept pressed across the click.
+ */
 export async function clickPointInPage(
   services: PageActionServices,
   sessionId: string,
@@ -1229,6 +1338,18 @@ export async function clickPointInPage(
   }
 }
 
+/**
+ * Move the native mouse from one viewport point to another in `steps`
+ * interpolated events; the caller owns the button and modifier state carried
+ * by those events.
+ * @param services - CDP transport plus sleep and agent-display hooks for the target session.
+ * @param sessionId - Page session that receives the input events.
+ * @param fromX - Start x coordinate in CSS pixels.
+ * @param fromY - Start y coordinate in CSS pixels.
+ * @param x - End x coordinate in CSS pixels.
+ * @param y - End y coordinate in CSS pixels.
+ * @param options - Step count, display label, and the button, buttons, and modifiers each event carries.
+ */
 export async function moveMouseInPage(
   services: PageActionServices,
   sessionId: string,
@@ -1253,6 +1374,18 @@ export async function moveMouseInPage(
   }
 }
 
+/**
+ * Dispatch one mouse press or release at viewport coordinates.
+ * @param services - CDP transport plus sleep and agent-display hooks for the target session.
+ * @param sessionId - Page session that receives the input event.
+ * @param type - `mousePressed` to press or `mouseReleased` to release.
+ * @param x - Viewport x coordinate in CSS pixels.
+ * @param y - Viewport y coordinate in CSS pixels.
+ * @param buttons - Button bit mask the page should observe as held.
+ * @param options - Button to dispatch and the click count reported to the page.
+ * @param modifiers - Keyboard modifier bit mask applied to the event.
+ * @returns the button that was dispatched.
+ */
 export async function mouseButtonInPage(
   services: PageActionServices,
   sessionId: string,
@@ -1278,6 +1411,18 @@ export async function mouseButtonInPage(
   return button
 }
 
+/**
+ * Dispatch one wheel action at viewport coordinates, spread over a short
+ * eased motion when the delta covers a page-sized distance.
+ * @param services - CDP transport plus sleep and agent-display hooks for the target session.
+ * @param sessionId - Page session that receives the wheel events.
+ * @param x - Viewport x coordinate in CSS pixels.
+ * @param y - Viewport y coordinate in CSS pixels.
+ * @param deltaX - Horizontal wheel delta in CSS pixels.
+ * @param deltaY - Vertical wheel delta in CSS pixels; positive scrolls down.
+ * @param modifiers - Keyboard modifier bit mask applied to every dispatched event.
+ * @param options - Display-only action label.
+ */
 export async function wheelInPage(
   services: PageActionServices,
   sessionId: string,
@@ -1893,6 +2038,12 @@ function assertPoint(x: number, y: number, operation: string): void {
   }
 }
 
+/**
+ * Return the CDP button bit for a mouse button, for accumulating held-button
+ * state.
+ * @param button - Mouse button to encode.
+ * @returns the CDP bit value: 1 for left, 2 for right, 4 for middle.
+ */
 export function mouseButtonMask(button: MouseButton): number {
   return pressedButtons(button)
 }

@@ -20,6 +20,7 @@ type LifecycleLike = {
   on(event: 'beforeExit' | 'exit', listener: () => void): unknown
 }
 
+/** The console subset injected into one agent round. */
 export type RoundConsole = Pick<Console, 'log' | 'info' | 'warn' | 'error'>
 
 let buffer: string[] = []
@@ -27,12 +28,19 @@ let hardStopMessage: string | null = null
 let flushed = false
 let lifecycleHooked = false
 
-/** Buffer one already-formatted cliLog chunk (the trailing newline is included). */
+/**
+ * Buffer one already-formatted cliLog chunk until the round commits.
+ * @param chunk - the full line to hold, including its trailing newline.
+ */
 export function bufferOutput(chunk: string): void {
   buffer.push(chunk)
 }
 
-/** Create the console object injected into one agent round. */
+/**
+ * Create the console object injected into one agent round.
+ * @param writeLine - sink for each formatted line; defaults to bufferOutput.
+ * @returns the frozen console whose log/info/warn/error methods format and write one line each.
+ */
 export function createRoundConsole(
   writeLine: (line: string) => void = bufferOutput,
 ): RoundConsole {
@@ -52,6 +60,7 @@ export function createRoundConsole(
  * Record the owned message of the first hard-stop error seen this run. Later hard stops
  * — the same error re-reported on each loop iteration — are ignored so the agent sees
  * the guidance exactly once.
+ * @param message - the owned guidance to print when the round ends.
  */
 export function markHardStop(message: string): void {
   if (hardStopMessage === null) {
@@ -67,6 +76,8 @@ export function markHardStop(message: string): void {
  * uncaught error the propagating Error already surfaces the message (the host prints it),
  * so we stay silent and only drop the buffer. Non-hard-stop output is flushed either way,
  * so an ordinary failure still shows what the script logged before it threw.
+ * @param stream - destination for the committed output.
+ * @param thrown - whether an uncaught error ended the run; a hard-stop message is then left to the propagating Error.
  */
 export function flushSink(stream: WritableLike, thrown: boolean): void {
   if (flushed) return
@@ -120,6 +131,8 @@ function oneLine(value: string): string {
  * rejection skips `beforeExit` but still reaches `exit` (`thrown: true`, so a hard stop
  * stays silent and lets the propagating Error surface the message). The stream still
  * accepts writes in both events, so the same `stream` serves both. Registered once.
+ * @param stream - destination for the final flush; an integer `fd` is written synchronously instead.
+ * @param lifecycle - emitter whose beforeExit/exit events trigger the flush; defaults to the process.
  */
 export function installLifecycleFlush(
   stream: WritableLike,

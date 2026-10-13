@@ -19,6 +19,11 @@
 import type { PageTarget } from './chrome.ts'
 import { getChrome, jsonVersion, pageTargets } from './chrome.ts'
 
+/**
+ * The `globalThis.ego` surface the ported harness calls, implemented by
+ * {@link installEgoBridge}. CDP methods carry raw protocol JSON; the task-space
+ * methods resolve to logical spaces over the single local Chrome instance.
+ */
 export interface EgoBridge {
   sendCDPMessage(payload: string): void
   onCDPMessage: ((message: string) => void) | null
@@ -131,6 +136,12 @@ async function connect(): Promise<WebSocket> {
  * Low-level CDP request over the shared browser WS, used by the snapshot
  * implementation (and available for future bridge internals). Resolves with the
  * CDP `result` object, or rejects on error/timeout.
+ *
+ * @param method - CDP method name, for example `Target.attachToTarget`.
+ * @param params - CDP parameters; omitted keys stay absent from the payload.
+ * @param sessionId - flattened target session to route through, or undefined for the browser session.
+ * @param timeoutMs - rejection deadline in milliseconds.
+ * @returns the CDP `result` object, `{}` when the response carries none.
  */
 export async function sendRaw(
   method: string,
@@ -154,6 +165,9 @@ export async function sendRaw(
  * Attach to a target and return its flattened session id (mirrors what the
  * harness does in `ensureSession`, but bridged locally so snapshot is
  * self-contained).
+ *
+ * @param targetId - Chrome target to attach.
+ * @returns the flattened session id; a response without one throws.
  */
 export async function attachSession(targetId: string): Promise<string> {
   const result = await sendRaw('Target.attachToTarget', { targetId, flatten: true })
@@ -186,6 +200,13 @@ function sendCDPMessage(payload: string): void {
   })()
 }
 
+/**
+ * List page targets through `/json/list`, in the order Chrome reports them.
+ * Chrome does not report which tab is active, so every entry carries
+ * `active: false` and the harness's last-tab fallback selects the final entry.
+ *
+ * @returns every page target as `{ tabs }`, each carrying its list position.
+ */
 export async function listTabs(): Promise<{
   tabs: Array<{ targetId: string; title?: string; url?: string; active?: boolean; index?: number }>
 }> {
@@ -205,6 +226,12 @@ export async function listTabs(): Promise<{
   }
 }
 
+/**
+ * Create a page target through `Target.createTarget`.
+ *
+ * @param url - initial URL for the new target.
+ * @returns the new target's id; a response without one throws.
+ */
 export async function createTab(url = 'about:blank'): Promise<{ targetId: string }> {
   const socket = await ensureOpenSocket()
   const response = await new Promise<{ targetId?: string } | null>((resolve, reject) => {
@@ -258,6 +285,11 @@ function rejectAllPending(error: Error): void {
   pendingResponses.clear()
 }
 
+/**
+ * Collaborators {@link installEgoBridge} delegates to: the snapshot
+ * implementation behind `ego.snapshot`, and the Chrome teardown behind
+ * `ego.dispose`.
+ */
 export interface InstallEgoBridgeOptions {
   /** `ego.snapshot` implementation (built by bridge/snapshot.ts). */
   snapshot: (options?: Record<string, unknown>) => Promise<{ content: string; refs: unknown[] }>
@@ -419,6 +451,9 @@ function createTaskSpaceShim(): Pick<
 /**
  * Install the CDP bridge as `globalThis.ego`. Returns a disposer that restores
  * the previous `globalThis.ego` (if any) and tears down the bridge + Chrome.
+ *
+ * @param options - snapshot implementation and Chrome teardown to delegate to.
+ * @returns a disposer that restores the previous `globalThis.ego` synchronously and starts the bridge and Chrome teardown.
  */
 export function installEgoBridge(options: InstallEgoBridgeOptions): () => void {
   const previous = (globalThis as Record<string, unknown>).ego
