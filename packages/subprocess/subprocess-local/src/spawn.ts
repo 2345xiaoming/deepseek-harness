@@ -90,22 +90,6 @@ function sleepTick(): Promise<void> {
 }
 
 /**
- * Send `sig` to a detached POSIX process group. Never throws: delivery races
- * process exit and may run in a timer callback, so failures are contained and
- * a missing pid is a no-op.
- * @param pid - the group leader's pid, when the spawn published one.
- * @param sig - the signal to deliver to the whole group.
- */
-export function killGroup(pid: number | undefined, sig: NodeJS.Signals): void {
-  if (pid === undefined) return
-  try {
-    process.kill(-pid, sig)
-  } catch {
-    // Swallow: see contract above.
-  }
-}
-
-/**
  * Terminate one Windows process tree with `taskkill /T /F`. Contained like
  * POSIX group signalling — delivery races tree exit, so an absent tree, a
  * nonzero status, or a missing taskkill binary must not break idempotent

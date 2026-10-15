@@ -34,8 +34,6 @@ export interface DockSnapshot {
   readonly canRedo: boolean
   /** Whether the docked grid still has room for another pane. */
   readonly canSplit: boolean
-  /** Recorded operation count, redo branch included. */
-  readonly opCount: number
   /** How many recorded intents are applied. */
   readonly cursor: number
 }
@@ -91,7 +89,6 @@ export class DockController {
       canUndo: this.sequencer.canUndo,
       canRedo: this.sequencer.canRedo,
       canSplit: canSplit(state),
-      opCount: this.sequencer.ops.length,
       cursor: this.sequencer.cursor,
     }
   }
