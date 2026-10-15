@@ -87,9 +87,6 @@ export const SessionTitleLlmConfigFields = {
   model: z.string(),
 }
 
-/** Shared Loader schema with no library defaults. */
-export const SessionTitleLlmConfigSchema: z<SessionTitleLlmConfig> = z.object(SessionTitleLlmConfigFields)
-
 /** Complete execution-control key set for direct construction validation. */
 const CONFIG_KEYS: ReadonlySet<string> = new Set([
   'maxInputBytes',
