@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { redactSecrets } from '@deepseek-ai/dsh-settings'
 import { boot, bootWithEntries, entryFace, fixtureServerPath, repoRoot, toolNames } from './helpers.ts'
-import { Config, mountConfig } from '../src/index.ts'
+import { Config, mountConfig, redactStatusError, writePatchRow } from '../src/index.ts'
+import { entryPatch } from '../src/client/McpSettingsSection.tsx'
 import { STATUS_PATH, TOGGLE_CONFIG_ROW_PATH, type McpServersSectionWire } from '../src/wire.ts'
 import { startHttpMcpFixture } from '../../../../packages/mcp/mcp-client/tests/http-fixture.ts'
 
@@ -277,7 +278,7 @@ describe('mcp-settings entry config', () => {
 
     const disable = await fetch(`http://127.0.0.1:${webServer.port}${TOGGLE_CONFIG_ROW_PATH}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-cbm-settings': '1' },
       body: JSON.stringify({ serverName: 'codebase-memory', enabled: false }),
     })
     expect(disable.status).toBe(200)
@@ -290,11 +291,97 @@ describe('mcp-settings entry config', () => {
 
     const enable = await fetch(`http://127.0.0.1:${webServer.port}${TOGGLE_CONFIG_ROW_PATH}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-cbm-settings': '1' },
       body: JSON.stringify({ serverName: 'codebase-memory', enabled: true }),
     })
     expect(enable.status).toBe(200)
     expect(fakeLoader.updates.at(-1)).toEqual({ id: 'include:mcp-codebase-memory', options: { disabled: false } })
-    expect(await readFile(patchPath, 'utf8')).toContain('disabled: false')
+    const patchAfterEnable = await readFile(patchPath, 'utf8')
+    expect(patchAfterEnable).toContain('disabled: false')
+    // Toggling back and forth must not accumulate duplicate root rows.
+    const rootRows = patchAfterEnable.split('\n').filter(line => line === '- id: mcp-codebase-memory')
+    expect(rootRows).toHaveLength(1)
+  })
+
+  it('refuses a cross-origin config-row toggle before reading the body', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'mcp-settings-csrf-'))
+    const include = entryFace('include', '@deepseek-ai/cordis-plugin-include', { path: join(root, 'profiles', 'web', 'cordis.yml') }, false)
+    const memory = entryFace('include:mcp-codebase-memory', MCP_CLIENT_PACKAGE, { serverName: 'codebase-memory' }, false)
+    const { ctx, webServer, fakeLoader } = await bootWithEntries([include, memory])
+    afterAll(async () => await ctx.dispose())
+
+    const patchPath = join(root, 'profiles', 'web', 'cordis.patch.yml')
+    await mkdir(dirname(patchPath), { recursive: true })
+    await writeFile(patchPath, '# profile patch\n')
+
+    const refused = await fetch(`http://127.0.0.1:${webServer.port}${TOGGLE_CONFIG_ROW_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ serverName: 'codebase-memory', enabled: false }),
+    })
+    expect(refused.status).toBe(400)
+    const payload = await refused.json() as { ok: boolean; error?: string }
+    expect(payload.ok).toBe(false)
+    expect(payload.error).toContain('cross-origin')
+    // Neither the runtime nor the patch file may move on a refused toggle.
+    expect(fakeLoader.updates).toHaveLength(0)
+    expect(await readFile(patchPath, 'utf8')).toBe('# profile patch\n')
+  })
+
+  it('masks the resolved secret value in a mount failure, not just the stored reference', () => {
+    const token = `sk-test-${Math.random().toString(36).slice(2)}`
+    // Whole-value reference: the only shape expandVar resolves, matching the
+    // documented usage where the env var holds the complete header value.
+    const entry = {
+      enabled: true,
+      transport: 'streamable-http',
+      url: 'https://127.0.0.1:9/mcp',
+      headers: { Authorization: '${MCP_SETTINGS_TEST_TOKEN}' },
+    } as const
+    const message = `connect ECONNREFUSED https://127.0.0.1:9/mcp with Authorization: Bearer ${token}`
+    // Stand in for the host environment the mount would have expanded.
+    process.env.MCP_SETTINGS_TEST_TOKEN = token
+    try {
+      const resolved = mountConfig('probe', {
+        ...entry,
+        env: {},
+        args: [],
+        cwd: '',
+      } as never)
+      const masked = redactStatusError(message, entry as never, resolved)
+      expect(masked).not.toContain(token)
+      expect(masked).toContain('***')
+      expect(masked).toContain('ECONNREFUSED')
+    } finally {
+      delete process.env.MCP_SETTINGS_TEST_TOKEN
+    }
+  })
+
+  it('rewrites an existing patch row in place instead of appending a duplicate', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'mcp-settings-upsert-'))
+    const patchPath = join(root, 'cordis.patch.yml')
+    await writePatchRow(patchPath, 'include:mcp-x', MCP_CLIENT_PACKAGE, false)
+    await writePatchRow(patchPath, 'include:mcp-x', MCP_CLIENT_PACKAGE, true)
+    await writePatchRow(patchPath, 'include:mcp-x', MCP_CLIENT_PACKAGE, false)
+    const text = await readFile(patchPath, 'utf8')
+    const rows = text.split('\n').filter(line => line === '- id: mcp-x')
+    expect(rows).toHaveLength(1)
+    expect(text).toContain('disabled: true')
+    expect(text).not.toContain('disabled: false')
+  })
+
+  it('clears args and cwd on edit while secret maps stay keep-on-blank', () => {
+    const stdio = entryPatch(
+      { transport: 'stdio', command: 'npx', args: '  \n ', cwd: '  ', url: '', env: '', headers: '' },
+      undefined,
+      undefined,
+    )
+    expect(stdio).toEqual({ transport: 'stdio', command: 'npx', args: [], cwd: '' })
+    const http = entryPatch(
+      { transport: 'streamable-http', command: '', args: '', cwd: '', url: 'https://x.test/mcp', env: '', headers: '' },
+      undefined,
+      undefined,
+    )
+    expect(http).toEqual({ transport: 'streamable-http', url: 'https://x.test/mcp' })
   })
 })

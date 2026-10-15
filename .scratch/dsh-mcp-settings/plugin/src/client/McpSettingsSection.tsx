@@ -390,18 +390,23 @@ function StatusBadge({ status, enabled, t }: {
  * Build the edit patch: only fields whose storage keys the form can rewrite,
  * leaving secret-bearing maps absent so stored values survive. Whole-map
  * writes for env/headers happen only when the user typed KEY=VALUE lines
- * (already parsed by the caller).
+ * (already parsed by the caller). Blank-keeps-blank applies ONLY to those
+ * secret maps: `args` and `cwd` are clearable (an empty list / empty string
+ * is a legal value meaning "none" / "inherit"), while `command` and `url`
+ * keep the stored value when blank because blank is not a legal value for
+ * either — validateSection rejects it — and silently dropping to an invalid
+ * entry would be worse than keeping.
  * @param draft - the draft form state.
  * @param env - parsed environment lines; absent when the field stayed blank.
  * @param headers - parsed header lines; absent when the field stayed blank.
  */
-function entryPatch(draft: DraftState, env: Record<string, string> | undefined, headers: Record<string, string> | undefined): Partial<McpServerEntryWire> {
+export function entryPatch(draft: DraftState, env: Record<string, string> | undefined, headers: Record<string, string> | undefined): Partial<McpServerEntryWire> {
   if (draft.transport === 'stdio') {
     return {
       transport: 'stdio',
       ...draft.command.trim() === '' ? {} : { command: draft.command.trim() },
-      ...draft.args.trim() === '' ? {} : { args: draft.args.split('\n').map(l => l.trim()).filter(Boolean) },
-      ...draft.cwd.trim() === '' ? {} : { cwd: draft.cwd.trim() },
+      args: draft.args.trim() === '' ? [] : draft.args.split('\n').map(l => l.trim()).filter(Boolean),
+      cwd: draft.cwd.trim(),
       ...env === undefined ? {} : { env },
     }
   }

@@ -61,7 +61,9 @@ export function apply(ctx: Context): void {
     toggleConfigRow: async (serverName, enabled) => {
       const response = await fetch(TOGGLE_CONFIG_ROW_PATH, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        // The host refuses toggles without this header, so a foreign page
+        // cannot flip config rows even if it reaches the local webserver.
+        headers: { 'content-type': 'application/json', 'x-cbm-settings': '1' },
         body: JSON.stringify({ serverName, enabled }),
       })
       if (!response.ok) {

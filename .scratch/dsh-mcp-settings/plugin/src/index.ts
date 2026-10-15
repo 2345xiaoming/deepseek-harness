@@ -19,7 +19,8 @@ import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { IncomingMessage } from 'node:http'
-import { appendFile, mkdir, readFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { SERVER_NAME_PATTERN, STATUS_PATH, TOGGLE_CONFIG_ROW_PATH, type McpTransport } from './wire.ts'
@@ -209,31 +210,82 @@ interface Mount {
   signature: string
 }
 
-/**
- * Locate the profile's patch file: the include entry's config `path` is the
- * base cordis.yml of the profile, so the co-located `cordis.patch.yml` is the
- * user patch layer (the same file `watchUserPatches` applies).
- */
-function profilePatchPathOf(loader: LoaderFace): string {
-  for (const entry of loader.entries()) {
-    if (entry.id !== 'include') continue
-    const basePath = entry.options.config?.path
-    if (typeof basePath === 'string' && basePath !== '') {
+  /**
+   * Locate the profile's patch file: the include entry's config `path` is the
+   * base cordis.yml of the profile, so the co-located `cordis.patch.yml` is the
+   * user patch layer (the same file `watchUserPatches` applies).
+   *
+   * Every include entry is a candidate and the first whose sibling patch file
+   * actually exists wins, so a profile composing several bases — or one whose
+   * path is not a `.yml` file at all — is still resolved instead of throwing on
+   * the first entry inspected.
+   */
+  function profilePatchPathOf(loader: LoaderFace): string {
+    const candidates: string[] = []
+    for (const entry of loader.entries()) {
+      if (entry.id !== 'include') continue
+      const basePath = entry.options.config?.path
+      if (typeof basePath !== 'string' || basePath === '') continue
       // The include carries its base config as a file: URL in the running host.
       const clean = basePath.startsWith('file:') ? fileURLToPath(basePath) : basePath
-      return join(dirname(clean), 'cordis.patch.yml')
+      const base = clean.endsWith('.yml') || clean.endsWith('.yaml') ? dirname(clean) : clean
+      candidates.push(join(base, 'cordis.patch.yml'))
+    }
+    const found = candidates.find(candidate => existsSync(candidate))
+    if (found !== undefined) return found
+    throw new Error(`mcp-settings: cannot locate the profile patch file (tried ${candidates.join(', ')})`)
+  }
+
+/**
+ * Rewrite the row for `entryId` in the profile patch, or append it when absent.
+ *
+ * The include applier indexes patch targets by the ROOT-level id the insert
+ * declared ("mcp-context7"); a nested loader id ("include:mcp-context7")
+ * would warn and skip, so the original insert would win on every re-apply.
+ * `leafId` is therefore both the lookup key and the row's own id.
+ *
+ * The row is located at ROOT level only: a nested `- id:` (an insert's child,
+ * a disabled group) belongs to another owner and must not be rewritten from
+ * under it. Absent, the row is appended — a missing patch file is created,
+ * and the loader picks it up on watch.
+ * @param existing - the patch file's current text ('' when it does not exist).
+ * @param leafId - the root-level id to upsert.
+ * @param row - the replacement row, ending in a newline.
+ * @returns the new file text.
+ */
+function upsertPatchRow(existing: string, leafId: string, row: string): string {
+  const lines = existing.split('\n')
+  const header = `- id: ${leafId}`
+  const start = lines.findIndex(line => line.trimEnd() === header)
+  if (start === -1) {
+    const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n'
+    return `${existing}${separator}${row}`
+  }
+  let end = lines.length
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i]!.startsWith('- ')) {
+      end = i
+      break
     }
   }
-  throw new Error('mcp-settings: cannot locate the profile patch file (include entry has no config path)')
+  return [...lines.slice(0, start), ...row.replace(/\n$/, '').split('\n'), ...lines.slice(end)].join('\n')
 }
 
-/** Append one id-targeted disabled/enabled patch row for a loader entry. */
-export async function appendPatchRow(patchPath: string, entryId: string, moduleName: string, enabled: boolean): Promise<void> {
-  // The include applier indexes patch targets by the ROOT-level id the insert
-  // declared ("mcp-context7"); a nested loader id ("include:mcp-context7")
-  // would warn and skip, so the original insert would win on every re-apply.
+/**
+ * Make the profile patch carry exactly one enabled/disabled row for a loader
+ * entry, replacing any previous row for the same id.
+ *
+ * Appending grew the file by one row per toggle, so flipping a row back and
+ * forth left a duplicate `- id:` block for each flip in the user's patch. The
+ * upsert keeps the file canonical no matter how often the row is toggled.
+ * @param patchPath - the profile patch file to rewrite.
+ * @param entryId - the loader entry id whose row is written.
+ * @param moduleName - the loader row's module name.
+ * @param enabled - whether the entry should end up enabled.
+ */
+export async function writePatchRow(patchPath: string, entryId: string, moduleName: string, enabled: boolean): Promise<void> {
   const leafId = entryId.slice(entryId.lastIndexOf(':') + 1)
-  const row = `\n- id: ${leafId}\n  name: '${moduleName}'\n  disabled: ${String(!enabled)}\n`
+  const row = `- id: ${leafId}\n  name: '${moduleName}'\n  disabled: ${String(!enabled)}\n`
   await mkdir(dirname(patchPath), { recursive: true })
   let existing = ''
   try {
@@ -241,7 +293,25 @@ export async function appendPatchRow(patchPath: string, entryId: string, moduleN
   } catch {
     // A missing patch file is created with the row; the loader picks it up on watch.
   }
-  await appendFile(patchPath, existing.endsWith('\n') ? row : '\n' + row)
+  await writeFile(patchPath, upsertPatchRow(existing, leafId, row))
+}
+
+/** Header a same-origin caller must send for a config-row toggle to run. */
+const TOGGLE_ORIGIN_HEADER = 'x-cbm-settings'
+
+/**
+ * Refuse a cross-origin toggle before any body is read.
+ *
+ * The webserver answers no CORS preflight, so a foreign page cannot send the
+ * custom header itself — only scripts already running in the settings page
+ * (same origin), curl, or a local agent can. `Sec-Fetch-Site`, sent by every
+ * current browser, is a second opinion: anything that is neither same-origin
+ * nor a direct navigation is rejected even if it somehow carries the header.
+ */
+function toggleOriginAllowed(req: IncomingMessage): boolean {
+  const site = req.headers['sec-fetch-site']
+  if (typeof site === 'string' && site !== 'same-origin' && site !== 'none') return false
+  return req.headers[TOGGLE_ORIGIN_HEADER] === '1'
 }
 
 /** Read a bounded JSON request body. @throws {TypeError} on invalid JSON or oversized bodies. */
@@ -290,12 +360,55 @@ export const Config = z.object({
   servers: z.dict(ServerEntry).default({}).volatile(),
 })
 
-/** Replace every stored secret value in a status message with a marker. */
-function redactStatusError(message: string, entry: McpServerEntry): string {
+/**
+ * Below this length a "secret" is indistinguishable from ordinary prose:
+ * masking a one- or two-character string shreds unrelated error text (an HTTP
+ * status, a port number) while protecting nothing.
+ */
+const REDACT_MIN_CHARS = 4
+
+/** The two `role('secret')` dicts `ServerEntry` declares; a third secret field must join this list. */
+const SECRET_FIELDS = ['env', 'headers'] as const
+
+/**
+ * Mask every secret value inside a status message.
+ *
+ * The stored values alone are NOT sufficient: `mountConfig` expands `${VAR}`
+ * references against the host environment before the server sees them, so a
+ * mount failure quotes the RESOLVED value — a 401 or a connection error
+ * carrying `Authorization: Bearer sk-...` would otherwise reach the status
+ * route unmasked. `mounted` supplies the expanded maps; it is absent only when
+ * the failure happened while building the config (an unresolved `${VAR}`),
+ * where the stored reference is all that exists.
+ *
+ * The field list mirrors `ServerEntry`; `dsh-settings`' `redactSecrets` cannot
+ * serve here because it reports secret POSITIONS, not the values, and this
+ * scrubber has to rewrite free text rather than a structured value.
+ * @param message - the raw failure text.
+ * @param entry - the settings entry it came from.
+ * @param mounted - the resolved mcp-client config, when the mount was attempted.
+ * @returns the message with every known secret value masked.
+ */
+export function redactStatusError(message: string, entry: McpServerEntry, mounted?: McpClient.Config): string {
+  const secrets = new Set<string>()
+  // An error-reporting path must never throw itself: a section that bypassed
+  // schema defaults (or a schema change) still yields a masked message.
+  const stored = (entry ?? {}) as Partial<Record<(typeof SECRET_FIELDS)[number], Record<string, string> | undefined>>
+  for (const field of SECRET_FIELDS) {
+    for (const value of Object.values(stored[field] ?? {})) secrets.add(value)
+  }
+  if (mounted !== undefined) {
+    // Both transports carry their secret maps under these two keys.
+    const live = mounted as unknown as Record<string, Record<string, string> | undefined>
+    for (const field of SECRET_FIELDS) {
+      for (const value of Object.values(live[field] ?? {})) secrets.add(value)
+    }
+  }
   let output = message
-  const secretValues = [...Object.values(entry.env), ...Object.values(entry.headers)]
-  for (const value of secretValues) {
-    if (value.length > 0) output = output.replaceAll(value, '***')
+  // Longest first: a secret containing another secret's text must not leave a
+  // fragment of itself behind once the shorter one has already been masked.
+  for (const value of [...secrets].filter(v => v.length >= REDACT_MIN_CHARS).sort((a, b) => b.length - a.length)) {
+    output = output.replaceAll(value, '***')
   }
   return output
 }
@@ -353,11 +466,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         }
         continue
       }
+      let mounted: McpClient.Config | undefined
       try {
         // Built before the mount try so a bad transport (missing command/url,
         // unresolved ${VAR}) lands in the entry's error state, not the queue.
-        const config = mountConfig(serverName, entry)
-        const signature = JSON.stringify(config)
+        const resolved = mountConfig(serverName, entry)
+        mounted = resolved
+        const signature = JSON.stringify(resolved)
         if (mount?.signature === signature) continue
         if (mount) {
           mounts.delete(serverName)
@@ -365,13 +480,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           clearStartingTimer(serverName)
           await mount.fiber.dispose()
         }
-        const fiber = await ctx.plugin(McpClient, config)
+        const fiber = await ctx.plugin(McpClient, resolved)
         mounts.set(serverName, { fiber, signature })
         failures.delete(serverName)
         armStartingTimer(serverName)
       } catch (reason) {
         // A bad entry is inert: it never crashes the host or its neighbours.
-        failures.set(serverName, redactStatusError(String(reason), entry))
+        // `mounted` is undefined exactly when the config could not be built,
+        // which is the one case whose message holds no expanded secret.
+        failures.set(serverName, redactStatusError(String(reason), entry, mounted))
         ctx.logger.warn(`mcp-settings: failed to mount "${serverName}":`, reason)
       }
     }
@@ -429,6 +546,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   /**
    * Set one config row's disabled flag at runtime and persist an id-targeted
    * patch row (the loader include re-applies it, surviving restarts).
+   *
+   * The patch file is written before the runtime is touched: it is what
+   * survives a restart, so a failed write must leave the running composition
+   * untouched rather than flip the runtime and silently revert on next launch.
    */
   async function setConfigRowEnabled(serverName: string, enabled: boolean): Promise<void> {
     const loader: LoaderFace | undefined = ctx.get('loader')
@@ -441,9 +562,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       }
     }
     if (target === undefined) throw new Error(`mcp-settings: no patch-configured mcp-client row named "${serverName}"`)
-    await target.update({ disabled: !enabled })
     const patchPath = profilePatchPathOf(loader)
-    await appendPatchRow(patchPath, target.id, MCP_CLIENT_PACKAGE, enabled)
+    await writePatchRow(patchPath, target.id, MCP_CLIENT_PACKAGE, enabled)
+    await target.update({ disabled: !enabled })
     refreshToolCounts()
   }
 
@@ -483,6 +604,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     handler: (req, res) => {
       void (async () => {
         try {
+          if (!toggleOriginAllowed(req)) {
+            throw new TypeError('mcp-settings: cross-origin toggle refused')
+          }
           const body = await readJsonBody(req)
           const serverName = (body as { serverName?: unknown }).serverName
           const enabled = (body as { enabled?: unknown }).enabled
