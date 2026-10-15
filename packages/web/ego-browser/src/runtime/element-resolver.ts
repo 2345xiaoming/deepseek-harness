@@ -2383,22 +2383,45 @@ function hasPlaywrightCompatibilitySyntax(value) {
   )
 }
 
+/**
+ * Advance CSS string quoting over one character. Quoted runs and backslash
+ * escapes are not selector syntax, so every scanner below asks this first and
+ * skips the character when it reports true.
+ * @param character - the character under the cursor.
+ * @param state - quoting state carried across the scan (`quote`, `escaped`).
+ * @returns true when the character belongs to quoting and must be skipped.
+ */
+function consumeQuoted(character, state) {
+  if (state.quote) {
+    if (state.escaped) state.escaped = false
+    else if (character === '\\') state.escaped = true
+    else if (character === state.quote) state.quote = undefined
+    return true
+  }
+  if (character === '"' || character === "'") {
+    state.quote = character
+    return true
+  }
+  return false
+}
+
+/**
+ * Advance bracket and paren depth over one unquoted character.
+ * @param character - the character under the cursor.
+ * @param depths - depth state carried across the scan (`bracket`, `paren`).
+ */
+function consumeDepth(character, depths) {
+  if (character === '[') depths.bracket += 1
+  else if (character === ']') depths.bracket = Math.max(0, depths.bracket - 1)
+  else if (character === '(') depths.paren += 1
+  else if (character === ')') depths.paren = Math.max(0, depths.paren - 1)
+}
+
 function containsUnquotedTextPseudo(value) {
   const tokens = [':has-text(', ':text-is(']
-  let quote
-  let escaped = false
+  const quoting = { quote: undefined, escaped: false }
   for (let index = 0; index < value.length; index += 1) {
-    const character = value[index]
-    if (quote) {
-      if (escaped) escaped = false
-      else if (character === '\\') escaped = true
-      else if (character === quote) quote = undefined
-      continue
-    }
-    if (character === '"' || character === "'") {
-      quote = character
-      continue
-    }
+    if (consumeQuoted(value[index], quoting)) continue
     if (tokens.some(token => value.startsWith(token, index))) return true
   }
   return false
@@ -2406,29 +2429,15 @@ function containsUnquotedTextPseudo(value) {
 
 function topLevelTokenPositions(value, token) {
   const positions = []
-  let quote
-  let escaped = false
-  let bracketDepth = 0
-  let parenDepth = 0
+  const quoting = { quote: undefined, escaped: false }
+  const depths = { bracket: 0, paren: 0 }
   for (let index = 0; index < value.length; index += 1) {
     const character = value[index]
-    if (quote) {
-      if (escaped) escaped = false
-      else if (character === '\\') escaped = true
-      else if (character === quote) quote = undefined
-      continue
-    }
-    if (character === '"' || character === "'") {
-      quote = character
-      continue
-    }
-    if (character === '[') bracketDepth += 1
-    else if (character === ']') bracketDepth = Math.max(0, bracketDepth - 1)
-    else if (character === '(') parenDepth += 1
-    else if (character === ')') parenDepth = Math.max(0, parenDepth - 1)
+    if (consumeQuoted(character, quoting)) continue
+    consumeDepth(character, depths)
     if (
-      bracketDepth === 0 &&
-      parenDepth === 0 &&
+      depths.bracket === 0 &&
+      depths.paren === 0 &&
       value.startsWith(token, index)
     ) {
       positions.push(index)
@@ -2439,49 +2448,22 @@ function topLevelTokenPositions(value, token) {
 }
 
 function isTopLevelPosition(value, position) {
-  let quote
-  let escaped = false
-  let bracketDepth = 0
-  let parenDepth = 0
+  const quoting = { quote: undefined, escaped: false }
+  const depths = { bracket: 0, paren: 0 }
   for (let index = 0; index < position; index += 1) {
     const character = value[index]
-    if (quote) {
-      if (escaped) escaped = false
-      else if (character === '\\') escaped = true
-      else if (character === quote) quote = undefined
-      continue
-    }
-    if (character === '"' || character === "'") {
-      quote = character
-    } else if (character === '[') {
-      bracketDepth += 1
-    } else if (character === ']') {
-      bracketDepth = Math.max(0, bracketDepth - 1)
-    } else if (character === '(') {
-      parenDepth += 1
-    } else if (character === ')') {
-      parenDepth = Math.max(0, parenDepth - 1)
-    }
+    if (consumeQuoted(character, quoting)) continue
+    consumeDepth(character, depths)
   }
-  return !quote && bracketDepth === 0 && parenDepth === 0
+  return !quoting.quote && depths.bracket === 0 && depths.paren === 0
 }
 
 function matchingParenPosition(value, open) {
-  let quote
-  let escaped = false
+  const quoting = { quote: undefined, escaped: false }
   let depth = 0
   for (let index = open; index < value.length; index += 1) {
     const character = value[index]
-    if (quote) {
-      if (escaped) escaped = false
-      else if (character === '\\') escaped = true
-      else if (character === quote) quote = undefined
-      continue
-    }
-    if (character === '"' || character === "'") {
-      quote = character
-      continue
-    }
+    if (consumeQuoted(character, quoting)) continue
     if (character === '(') depth += 1
     if (character === ')' && --depth === 0) return index
   }

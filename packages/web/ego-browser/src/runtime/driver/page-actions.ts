@@ -1055,6 +1055,39 @@ async function clickResolvedElement(
   })
 }
 
+/**
+ * Run one `Runtime.callFunctionOn` point probe and return the error text the
+ * page reported, or null when it reported none. Both point assertions below
+ * share this call shape and differ only in the message they raise.
+ * @param services - services carrying the CDP call.
+ * @param sessionId - CDP session the probe runs in.
+ * @param objectId - element handle the probe is bound to.
+ * @param expression - probe function source sent to the page.
+ * @param point - viewport point passed as the probe's single argument.
+ * @returns the reported error text, or null when the probe reported none.
+ */
+async function pointProbeError(
+  services: PageActionServices,
+  sessionId: string,
+  objectId: string,
+  expression: string,
+  point: { x: number; y: number },
+): Promise<string | null> {
+  const response = await services.cdp(
+    'Runtime.callFunctionOn',
+    {
+      functionDeclaration: expression,
+      objectId,
+      arguments: [{ value: point }],
+      returnByValue: true,
+      awaitPromise: false,
+    },
+    sessionId,
+  )
+  const result = runtimeValue(response, expression)
+  return typeof result?.error === 'string' ? result.error : null
+}
+
 async function assertSafeFillActivationTarget(
   services: PageActionServices,
   sessionId: string,
@@ -1074,21 +1107,16 @@ async function assertSafeFillActivationTarget(
     }
     return { safe: true };
   }`
-  const response = await services.cdp(
-    'Runtime.callFunctionOn',
-    {
-      functionDeclaration: expression,
-      objectId,
-      arguments: [{ value: point }],
-      returnByValue: true,
-      awaitPromise: false,
-    },
+  const problem = await pointProbeError(
+    services,
     sessionId,
+    objectId,
+    expression,
+    point,
   )
-  const result = runtimeValue(response, expression)
-  if (typeof result?.error === 'string') {
+  if (problem !== null) {
     throw new ElementResolutionError(
-      `page.fill cannot safely activate the editor because ${result.error} would receive the click`,
+      `page.fill cannot safely activate the editor because ${problem} would receive the click`,
       'permanent',
     )
   }
@@ -1881,23 +1909,15 @@ async function assertElementReceivesPointerEvents(
       ? { error: describeHitTarget(interceptor) + " intercepts pointer events" }
       : { ok: true };
   }`
-  const response = await services.cdp(
-    'Runtime.callFunctionOn',
-    {
-      functionDeclaration: expression,
-      objectId,
-      arguments: [{ value: point }],
-      returnByValue: true,
-      awaitPromise: false,
-    },
+  const problem = await pointProbeError(
+    services,
     sessionId,
+    objectId,
+    expression,
+    point,
   )
-  const result = runtimeValue(response, expression)
-  if (typeof result?.error === 'string') {
-    throw new ElementResolutionError(
-      `page.click failed: ${result.error}`,
-      'transient',
-    )
+  if (problem !== null) {
+    throw new ElementResolutionError(`page.click failed: ${problem}`, 'transient')
   }
 }
 

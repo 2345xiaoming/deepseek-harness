@@ -233,6 +233,28 @@ function readSelf(): string | null {
   }
 }
 
+/**
+ * Visit every child node that carries an ESTree `type`, skipping the position
+ * and source keys that are never nodes. The recursion belongs to the caller:
+ * both walkers below share this skeleton and differ only in what they collect.
+ * @param node - node whose children are visited.
+ * @param visit - receives one child node.
+ */
+function walkChildNodes(node: any, visit: (child: any) => void) {
+  for (const key of Object.keys(node)) {
+    if (key === 'type' || key === 'loc' || key === 'start' || key === 'end')
+      continue
+    const child = node[key]
+    if (Array.isArray(child)) {
+      for (const item of child) {
+        if (item && typeof item.type === 'string') visit(item)
+      }
+    } else if (child && typeof child.type === 'string') {
+      visit(child)
+    }
+  }
+}
+
 function walkFunctions(node: any, visitor: (node: any) => void) {
   if (!node || typeof node !== 'object') return
   if (
@@ -241,18 +263,7 @@ function walkFunctions(node: any, visitor: (node: any) => void) {
   ) {
     visitor(node)
   }
-  for (const key of Object.keys(node)) {
-    if (key === 'type' || key === 'loc' || key === 'start' || key === 'end')
-      continue
-    const child = node[key]
-    if (Array.isArray(child)) {
-      for (const item of child) {
-        if (item && typeof item.type === 'string') walkFunctions(item, visitor)
-      }
-    } else if (child && typeof child.type === 'string') {
-      walkFunctions(child, visitor)
-    }
-  }
+  walkChildNodes(node, child => walkFunctions(child, visitor))
 }
 
 function walkAliases(
@@ -267,18 +278,7 @@ function walkAliases(
       }
     }
   }
-  for (const key of Object.keys(node)) {
-    if (key === 'type' || key === 'loc' || key === 'start' || key === 'end')
-      continue
-    const child = node[key]
-    if (Array.isArray(child)) {
-      for (const item of child) {
-        if (item && typeof item.type === 'string') walkAliases(item, visitor)
-      }
-    } else if (child && typeof child.type === 'string') {
-      walkAliases(child, visitor)
-    }
-  }
+  walkChildNodes(node, child => walkAliases(child, visitor))
 }
 
 function extractFunctionName(node: any): string | null {

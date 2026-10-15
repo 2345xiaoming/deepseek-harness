@@ -82,6 +82,25 @@ type ReconcileOptions = {
 }
 
 /**
+ * Resolve a published label inside one ledger, reporting why it is unusable.
+ * @param ledger - ledger the label is resolved against.
+ * @param label - published label such as `p1`.
+ * @returns the stored entry.
+ * @throws when the label was never used, was released, or was closed already.
+ */
+function resolvePageEntry(ledger: PageLedger, label: string): PageLedgerEntry {
+  const entry = ledger.pages[label]
+  if (entry) return entry
+  if (ledger.releasedLabels.includes(label)) {
+    throw new Error(`page ${label} was released`)
+  }
+  if (ledger.usedLabels.includes(label)) {
+    throw new Error(`page ${label} was closed`)
+  }
+  throw new Error(`page label not found: ${label}`)
+}
+
+/**
  * Stores durable page labels in one JSON document per task space. Each update
  * replaces the complete document with an atomic rename so readers never see a
  * partially written ledger.
@@ -169,15 +188,7 @@ export class PageLedgerStore {
   async getPage(spaceId: number, label: string): Promise<ManagedPage> {
     assertLabel(label)
     const ledger = await this.read(spaceId)
-    const entry = ledger.pages[label]
-    if (entry) return { label, ...entry }
-    if (ledger.releasedLabels.includes(label)) {
-      throw new Error(`page ${label} was released`)
-    }
-    if (ledger.usedLabels.includes(label)) {
-      throw new Error(`page ${label} was closed`)
-    }
-    throw new Error(`page label not found: ${label}`)
+    return { label, ...resolvePageEntry(ledger, label) }
   }
 
   /**
@@ -243,6 +254,32 @@ export class PageLedgerStore {
   }
 
   /**
+   * Remove one Page from a task space and run `after` on the same ledger
+   * revision: a close and a release differ only in the bookkeeping they leave
+   * behind, never in how the label is resolved or dropped.
+   * @param spaceId - task space that owns the Page.
+   * @param label - published label such as `p1`.
+   * @param after - extra ledger mutation applied after the entry is dropped.
+   * @returns the removed page entry.
+   * @throws when the label was never used, was released, or was closed already.
+   */
+  async #removePage(
+    spaceId: number,
+    label: string,
+    after?: (ledger: PageLedger, entry: PageLedgerEntry) => void,
+  ): Promise<ManagedPage> {
+    assertLabel(label)
+    let removed: ManagedPage
+    await this.#update(spaceId, (ledger) => {
+      const entry = resolvePageEntry(ledger, label)
+      removed = { label, ...entry }
+      Reflect.deleteProperty(ledger.pages, label)
+      after?.(ledger, entry)
+    })
+    return removed!
+  }
+
+  /**
    * Remove a Page from the ledger, recording that its label was closed.
    * @param spaceId - task space that owns the Page.
    * @param label - published label such as `p1`.
@@ -250,23 +287,7 @@ export class PageLedgerStore {
    * @throws when the label was never used, was released, or was closed already.
    */
   async closePage(spaceId: number, label: string): Promise<ManagedPage> {
-    assertLabel(label)
-    let removed: ManagedPage
-    await this.#update(spaceId, (ledger) => {
-      const entry = ledger.pages[label]
-      if (!entry) {
-        if (ledger.releasedLabels.includes(label)) {
-          throw new Error(`page ${label} was released`)
-        }
-        if (ledger.usedLabels.includes(label)) {
-          throw new Error(`page ${label} was closed`)
-        }
-        throw new Error(`page label not found: ${label}`)
-      }
-      removed = { label, ...entry }
-      Reflect.deleteProperty(ledger.pages, label)
-    })
-    return removed!
+    return this.#removePage(spaceId, label)
   }
 
   /**
@@ -277,25 +298,10 @@ export class PageLedgerStore {
    * @throws when the label was never used, was released, or was closed already.
    */
   async releasePage(spaceId: number, label: string): Promise<ManagedPage> {
-    assertLabel(label)
-    let removed: ManagedPage
-    await this.#update(spaceId, (ledger) => {
-      const entry = ledger.pages[label]
-      if (!entry) {
-        if (ledger.releasedLabels.includes(label)) {
-          throw new Error(`page ${label} was released`)
-        }
-        if (ledger.usedLabels.includes(label)) {
-          throw new Error(`page ${label} was closed`)
-        }
-        throw new Error(`page label not found: ${label}`)
-      }
-      removed = { label, ...entry }
-      Reflect.deleteProperty(ledger.pages, label)
+    return this.#removePage(spaceId, label, (ledger, entry) => {
       ledger.releasedLabels.push(label)
       ledger.unmanagedTargets[entry.targetId] = entry.openedBy
     })
-    return removed!
   }
 
   /**

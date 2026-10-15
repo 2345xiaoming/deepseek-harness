@@ -3061,55 +3061,31 @@ function snapshotSourceHeader(input: {
   return `[${input.currentLabel} ${JSON.stringify(currentTitle)} | space ${JSON.stringify(input.spaceName)}(${input.spaceId}): ${managed} managed, ${untracked} untracked${inventory}${budget}]`
 }
 
-async function evaluateInSession<T>(
+/**
+ * Run one `Runtime.evaluate` against the session, reporting a protocol timeout
+ * as the execution-timeout error both call shapes surface.
+ * @param services - services carrying the CDP call and the clock.
+ * @param sessionId - CDP session the expression runs in.
+ * @param expression - expression source sent to the page.
+ * @param timeoutMs - protocol timeout for the CDP request.
+ * @param executionTimeoutMs - page-side execution timeout, when one was set.
+ * @param startedAt - call start, used to classify a timeout.
+ * @returns the raw CDP response.
+ * @throws when the CDP call fails, normalised when the failure was a timeout.
+ */
+async function evaluateExpression(
   services: PageModelServices,
   sessionId: string,
-  expression: string | ((argument: any) => T | Promise<T>),
-  hasArgument: boolean,
-  serializedArgument?: unknown,
-  timeoutMs?: number,
-  executionTimeoutMs?: number,
-): Promise<T> {
-  const startedAt = services.now()
-  if (typeof expression === 'string') {
-    let response
-    try {
-      response = await services.cdp(
-        'Runtime.evaluate',
-        {
-          expression,
-          returnByValue: true,
-          awaitPromise: true,
-          ...(executionTimeoutMs === undefined
-            ? {}
-            : { timeout: executionTimeoutMs }),
-        },
-        sessionId,
-        timeoutMs,
-      )
-    } catch (error) {
-      throw normalizeProtocolExecutionTimeout(
-        error,
-        services.now() - startedAt,
-        executionTimeoutMs,
-      )
-    }
-    return runtimeValue(response, expression) as T
-  }
-
-  const source = expression.toString()
-  let response
+  expression: string,
+  timeoutMs: number | undefined,
+  executionTimeoutMs: number | undefined,
+  startedAt: number,
+): Promise<any> {
   try {
-    response = await services.cdp(
+    return await services.cdp(
       'Runtime.evaluate',
       {
-        expression: `(async function __egoPageEvaluate() {
-        return await ${pageFunctionCallExpression(
-          source,
-          hasArgument,
-          serializedArgument,
-        )};
-      })()`,
+        expression,
         returnByValue: true,
         awaitPromise: true,
         ...(executionTimeoutMs === undefined
@@ -3126,6 +3102,45 @@ async function evaluateInSession<T>(
       executionTimeoutMs,
     )
   }
+}
+
+async function evaluateInSession<T>(
+  services: PageModelServices,
+  sessionId: string,
+  expression: string | ((argument: any) => T | Promise<T>),
+  hasArgument: boolean,
+  serializedArgument?: unknown,
+  timeoutMs?: number,
+  executionTimeoutMs?: number,
+): Promise<T> {
+  const startedAt = services.now()
+  if (typeof expression === 'string') {
+    const response = await evaluateExpression(
+      services,
+      sessionId,
+      expression,
+      timeoutMs,
+      executionTimeoutMs,
+      startedAt,
+    )
+    return runtimeValue(response, expression) as T
+  }
+
+  const source = expression.toString()
+  const response = await evaluateExpression(
+    services,
+    sessionId,
+    `(async function __egoPageEvaluate() {
+        return await ${pageFunctionCallExpression(
+          source,
+          hasArgument,
+          serializedArgument,
+        )};
+      })()`,
+    timeoutMs,
+    executionTimeoutMs,
+    startedAt,
+  )
   return runtimeValue(response, source) as T
 }
 
