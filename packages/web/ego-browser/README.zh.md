@@ -141,6 +141,7 @@ node packages/web/ego-browser/tests/smoke.mjs
 
 - `src/runtime/` 整片以 `// @ts-nocheck` 豁免仓库 strict 剖面，CDP 载荷仍是上游的松散类型；`.oxlintrc.json` 因此把该移植面（且仅该移植面）从松散类型必然触发的类型感知规则中排除。`src/bridge/**`、`src/tools.ts`、`src/index.ts`、`tests/**` 仍走严格剖面。
 - 上游的 `*.test.mjs` 未整体移植：本包现覆盖 ref 身份、iframe 归属、snapshot 消毒与 download 路径校验四类约定，上游其余用例（CDP 调用计数、快照压缩、墓碑上限、真实下载完成路径与端到端）仍只在 upstream 侧。
+- 覆盖率闸门豁免该移植面，只保留两个算法核心（`src/runtime/js-source.ts` 与 `src/runtime/driver/action-target.ts`）：其余部分只有真实 Chrome 会话才会执行，而驱动它的 spec 只覆盖上述四类约定，因此多数移植分支仍未被执行，上游能到达那些分支的用例也未移植。`vitest.config.ts` 列明被豁免的文件，并带有移除该豁免的 TODO。
 
 ### 开发备注
 

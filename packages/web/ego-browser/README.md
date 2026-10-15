@@ -141,6 +141,7 @@ The definitions do not change between requests, so they preserve an already-reus
 
 - The whole of `src/runtime/` is exempt from the repository's strict profile by `// @ts-nocheck`, and the CDP payloads keep upstream's loose types; `.oxlintrc.json` therefore excludes that ported surface (and only that surface) from the type-aware rules that loose types necessarily trip. `src/bridge/**`, `src/tools.ts`, `src/index.ts`, and `tests/**` stay under the strict profile.
 - Upstream's `*.test.mjs` cases were not ported wholesale: this package covers four contracts — ref identity, iframe ownership, snapshot sanitization, and download path validation — while the remaining upstream cases (CDP call counts, snapshot compression, tombstone limits, the real download completion path, and end to end) still live upstream only.
+- The coverage gate exempts the ported surface except its two algorithmic cores (`src/runtime/js-source.ts` and `src/runtime/driver/action-target.ts`): only a real Chrome session executes the rest, and the specs that drive one assert the four contracts above, so most ported branches stay unexecuted while the upstream cases that reached them were not ported. `vitest.config.ts` names the exempt files and carries the TODO to remove the exemption.
 
 ### Dev Note
 
