@@ -54,3 +54,6 @@ native/system/test/bin/
 # OpenCodeReview plugin. They stay beside the work, never as tracked files, so
 # repository gates do not read copies as maintained prose.
 .plugins/_research/
+# Generated plugin reports (architecture reviews and similar) stay outside the
+# tracked tree; they are run artifacts, not repository source.
+.plugins/_reports/
