@@ -21,7 +21,7 @@ function specFor(files, bundles) {
   }
 }
 
-/** A fake review worker: scripted per call, records the tasks it saw. */
+/** A fake review worker: scripted per task kind, records the tasks it saw. */
 function fakeWorker(kind, script) {
   const calls = []
   return {
@@ -29,8 +29,11 @@ function fakeWorker(kind, script) {
     calls,
     async run(task) {
       calls.push(task)
-      const isFilter = task.label.startsWith('ocr review filter')
-      const queue = isFilter ? script.filter : script.review
+      const key = task.label.includes('filter') ? 'filter'
+        : task.label.includes('plan') ? 'plan'
+          : task.label.includes('relocate') ? 'relocate'
+            : 'review'
+      const queue = script[key]
       const next = Array.isArray(queue) ? queue.shift() : queue
       if (next instanceof Error) throw next
       return next
@@ -128,4 +131,99 @@ test('filter runs only when comments exist', async () => {
   const result = await run(spec, worker)
   assert.equal(result.stats.filterRuns, 0)
   assert.equal(result.stats.worker, 'subagent')
+})
+
+/* ───────────────────────── plan phase (ported plan task) ───────────────────────── */
+
+test('plan guidance reaches the review worker prompt', async () => {
+  const spec = specFor(['a.ts'], [{ id: 1, label: 'one', files: ['a.ts'] }])
+  const worker = fakeWorker('llm', {
+    plan: {
+      summary: 'tightens the parser',
+      issues: [{ severity: 'high', description: 'off-by-one in the loop', tool_plan: ['read a.ts — confirm the bound'] }],
+    },
+    review: { comments: [] },
+    filter: { approve_all: true },
+  })
+  const result = await run(spec, worker, { plan: true })
+  const reviewTask = worker.calls.find(call => call.label.startsWith('ocr review bundle'))
+  assert.ok(reviewTask.user.includes('### Review Plan'))
+  assert.ok(reviewTask.user.includes('Summary: tightens the parser'))
+  assert.ok(reviewTask.user.includes('1. [high] off-by-one in the loop'))
+  assert.ok(reviewTask.user.includes('→ read a.ts — confirm the bound'))
+  assert.equal(result.stats.planRuns, 1)
+})
+
+test('a failed plan is fail-open: the review still runs without guidance', async () => {
+  const spec = specFor(['a.ts'], [{ id: 1, label: 'one', files: ['a.ts'] }])
+  const worker = fakeWorker('llm', {
+    plan: new Error('planner exploded'),
+    review: { comments: [{ path: 'a.ts', content: 'found it' }] },
+    filter: { approve_all: true },
+  })
+  const result = await run(spec, worker, { plan: true })
+  assert.equal(result.findings.length, 1)
+  assert.equal(result.stats.planRuns, 0)
+})
+
+test('planning stays off when disabled', async () => {
+  const spec = specFor(['a.ts'], [{ id: 1, label: 'one', files: ['a.ts'] }])
+  const worker = fakeWorker('llm', { review: { comments: [] }, filter: { approve_all: true } })
+  await run(spec, worker, { plan: false })
+  assert.equal(worker.calls.some(call => call.label.includes('plan')), false)
+})
+
+/* ────────────────────── LLM relocation fallback ────────────────────── */
+
+const ANCHOR_DIFF = '--- a/f.ts\n+++ b/f.ts\n@@ -1,1 +1,2 @@\n ctx\n+const added = 1\n'
+
+test('relocation re-anchors a comment the deterministic pass could not place', async () => {
+  const spec = specFor(['f.ts'], [{ id: 1, label: 'one', files: ['f.ts'] }])
+  const worker = fakeWorker('llm', {
+    review: { comments: [{ path: 'f.ts', content: 'this line is wrong' }] },
+    relocate: { locations: [{ index: 0, snippet: 'const added = 1' }] },
+    filter: { approve_all: true },
+  })
+  const result = await run(spec, worker, {
+    relocation: 'llm',
+    diffs: new Map([['f.ts', ANCHOR_DIFF]]),
+  })
+  assert.equal(result.findings.length, 1)
+  assert.equal(result.findings[0].positionVerified, true)
+  assert.equal(result.findings[0].startLine, 2)
+  assert.equal(result.stats.relocated, 1)
+})
+
+test('relocation failure leaves positions unchanged (fail-open)', async () => {
+  const spec = specFor(['f.ts'], [{ id: 1, label: 'one', files: ['f.ts'] }])
+  const worker = fakeWorker('llm', {
+    review: { comments: [{ path: 'f.ts', content: 'unplaced' }] },
+    relocate: new Error('locator exploded'),
+    filter: { approve_all: true },
+  })
+  const result = await run(spec, worker, { relocation: 'llm', diffs: new Map([['f.ts', ANCHOR_DIFF]]) })
+  assert.equal(result.findings[0].positionVerified, false)
+  assert.equal(result.stats.relocated, 0)
+})
+
+test('a snippet that still does not match stays unverified', async () => {
+  const spec = specFor(['f.ts'], [{ id: 1, label: 'one', files: ['f.ts'] }])
+  const worker = fakeWorker('llm', {
+    review: { comments: [{ path: 'f.ts', content: 'unplaced' }] },
+    relocate: { locations: [{ index: 0, snippet: 'not in the diff at all' }] },
+    filter: { approve_all: true },
+  })
+  const result = await run(spec, worker, { relocation: 'llm', diffs: new Map([['f.ts', ANCHOR_DIFF]]) })
+  assert.equal(result.findings[0].positionVerified, false)
+  assert.equal(result.stats.relocated, 0)
+})
+
+test('deterministic-only relocation never calls the locator', async () => {
+  const spec = specFor(['f.ts'], [{ id: 1, label: 'one', files: ['f.ts'] }])
+  const worker = fakeWorker('llm', {
+    review: { comments: [{ path: 'f.ts', content: 'unplaced' }] },
+    filter: { approve_all: true },
+  })
+  await run(spec, worker, { relocation: 'deterministic', diffs: new Map([['f.ts', ANCHOR_DIFF]]) })
+  assert.equal(worker.calls.some(call => call.label.includes('relocate')), false)
 })

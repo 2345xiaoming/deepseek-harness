@@ -33,6 +33,10 @@ export interface ToolHostConfig {
   maxTokens: number
   /** Cooperative timeout budget for one tool call, in milliseconds. */
   toolTimeoutMs: number
+  /** Run a pre-review plan task per bundle and feed its guidance to the review worker. */
+  plan: boolean
+  /** Comment positioning: deterministic only, or with the LLM relocation fallback. */
+  relocation: 'deterministic' | 'llm'
   /** Worker concurrency across bundles. */
   concurrency: number
   /** Exclusion globs applied at selection. */
@@ -245,7 +249,9 @@ const REVIEW_OUTPUT = {
       properties: {
         worker: { required: true, type: 'string', enum: ['subagent', 'llm'] },
         bundles: { required: true, type: 'integer' },
+        planRuns: { required: true, type: 'integer' },
         filterRuns: { required: true, type: 'integer' },
+        relocated: { required: true, type: 'integer' },
         durationMs: { required: true, type: 'integer' },
       },
     },
@@ -285,8 +291,8 @@ function renderResult(result: ReviewResult): string {
     `OpenCodeReview ${result.mode} review — ${result.findings.length} finding(s), `
     + `coverage ${result.coverage.reviewed}/${result.coverage.total} (rate ${result.coverage.rate}), `
     + `${result.filteredCount} filtered`,
-    `worker=${result.stats.worker} · bundles=${result.stats.bundles} · filterRuns=${result.stats.filterRuns} `
-    + `· ${Math.round(result.stats.durationMs / 1000)}s`,
+    `worker=${result.stats.worker} · bundles=${result.stats.bundles} · planRuns=${result.stats.planRuns} `
+    + `· filterRuns=${result.stats.filterRuns} · relocated=${result.stats.relocated} · ${Math.round(result.stats.durationMs / 1000)}s`,
   )
   for (const severity of SEVERITIES) {
     const findings = result.findings.filter(finding => finding.severity === severity)
@@ -445,6 +451,8 @@ export function registerOcrTools(ctx: Context, host: ToolHost): () => void {
         worker,
         ...(args.background !== undefined ? { background: args.background } : {}),
         concurrency: runConcurrency(host, args.concurrency),
+        plan: host.config.plan,
+        relocation: host.config.relocation,
         now: new Date().toISOString(),
         signal: exec.signal,
       })
@@ -501,6 +509,8 @@ export function registerOcrTools(ctx: Context, host: ToolHost): () => void {
         worker,
         ...(args.background !== undefined ? { background: args.background } : {}),
         concurrency: runConcurrency(host, args.concurrency),
+        plan: host.config.plan,
+        relocation: host.config.relocation,
         now: new Date().toISOString(),
         signal: exec.signal,
       })

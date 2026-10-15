@@ -35,6 +35,8 @@ function fakeHost(configOver = {}) {
       maxTokens: 1000,
       toolTimeoutMs: 60_000,
       concurrency: 2,
+      plan: false,
+      relocation: 'deterministic',
       exclude: ['**/skip-me.ts'],
       ruleFile: '.opencodereview/rule.json',
       systemRules: true,
@@ -118,6 +120,7 @@ test('ocr_review contains worker failures and records the run', async () => {
     assert.equal(value.findings.length, 0)
     const text = byName.ocr_review.output.render({ repo }, value)[0].text
     assert.ok(text.includes('worker=llm'), 'runtime stats are model-visible')
+    assert.ok(text.includes('planRuns=0'), 'plan accounting is visible')
     assert.deepEqual(host.recorded.map(entry => entry.kind), ['review'])
     dispose()
   } finally {

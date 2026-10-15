@@ -130,7 +130,11 @@ export interface ReviewResult {
   stats: {
     worker: 'subagent' | 'llm'
     bundles: number
+    /** Bundles whose pre-review plan succeeded (fail-open plans are not counted). */
+    planRuns: number
     filterRuns: number
+    /** Comments the LLM relocation fallback re-anchored after the deterministic pass missed. */
+    relocated: number
     durationMs: number
   }
 }

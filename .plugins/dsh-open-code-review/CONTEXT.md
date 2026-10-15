@@ -18,6 +18,14 @@ Related files reviewed together by one review worker, so cross-file observations
 **Rule Group**:
 Files sharing one resolved review checklist.
 
+**Review Plan**:
+The pre-review document one bundle's plan task produces: a change summary plus the risk points worth checking and the context checks that would confirm each.
+_Avoid_: checklist, todo list
+
+**Comment Relocation**:
+Anchoring a review comment to the diff lines it targets, so its finding carries a verified position.
+_Avoid_: line matching
+
 **Review Worker**:
 The isolated LLM execution unit that takes one worker task and returns one structured document.
 _Avoid_: reviewer agent, sub-agent

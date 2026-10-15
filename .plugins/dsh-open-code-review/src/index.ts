@@ -56,6 +56,10 @@ export interface Config {
   toolTimeoutMs: number
   /** Worker concurrency across bundles. */
   concurrency: number
+  /** Run a pre-review plan task per bundle and feed its guidance to the review worker. */
+  plan: boolean
+  /** Comment positioning: deterministic only, or with the LLM relocation fallback. */
+  relocation: 'deterministic' | 'llm'
   /** Exclusion globs applied at target selection. */
   exclude: string[]
   /** Repository-relative project rule file layered over the built-in ruleset. */
@@ -77,6 +81,8 @@ export const Config: z<Config> = z.object({
   maxTokens: z.number().min(256).max(65536).default(8192),
   toolTimeoutMs: z.number().min(60_000).max(3_600_000).default(1_800_000),
   concurrency: z.number().min(1).max(8).default(2),
+  plan: z.boolean().default(true),
+  relocation: z.union([z.const('deterministic'), z.const('llm')]).default('llm'),
   exclude: z.array(z.string()).default([
     '**/node_modules/**',
     '**/dist/**',
@@ -144,6 +150,8 @@ export function apply(ctx: Context, config: Config): void {
     maxTokens: config.maxTokens,
     toolTimeoutMs: config.toolTimeoutMs,
     concurrency: config.concurrency,
+    plan: config.plan,
+    relocation: config.relocation,
     exclude: config.exclude,
     ruleFile: config.ruleFile,
     systemRules: config.systemRules,

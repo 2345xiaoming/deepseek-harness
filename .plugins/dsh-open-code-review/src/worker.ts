@@ -400,6 +400,8 @@ export function reviewUserPrompt(params: {
   ruleText: string
   background?: string
   now: string
+  /** Pre-review plan guidance (see {@link renderPlanGuidance}). */
+  planGuidance?: string
 }): string {
   const others = params.otherChangedFiles.length > 0 ? params.otherChangedFiles.join('\n') : '(none)'
   const background = params.background?.trim() ? params.background.trim() : '(not provided)'
@@ -420,6 +422,9 @@ ${background}
 
 ### Review Checklist
 ${params.ruleText}
+
+### Review Plan
+${params.planGuidance?.trim() ? params.planGuidance.trim() : '(not provided)'}
 
 Now please review the code changes in <review_files> above and return the structured comments document.`
 }
@@ -486,4 +491,226 @@ ${list}
 ### Output
 
 Return one structured document: {"approve_all": true} when every comment survives, or {"approve_all": false, "remove": [{"index": <comment number>, "reason": "<Ground A or Ground B>", "disproof": "<the specific diff line that disproves it>"}]} listing only comments meeting Ground A or Ground B.`
+}
+
+/* ─────────────────────────── review plan (pre-review) ─────────────────────────── */
+
+/** Structured-output schema for one bundle's pre-review plan. */
+export const PLAN_OUTPUT_SCHEMA: ObjectJsonSchema = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string', description: 'Brief purpose and scope of the change' },
+    issues: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          severity: { type: 'string', enum: ['high', 'medium', 'low'] },
+          description: { type: 'string', description: 'Location, nature, and potential impact of the risk' },
+          tool_plan: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Planned context checks, one line each (tool intent, not an invocation)',
+          },
+        },
+        required: ['severity', 'description'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['summary', 'issues'],
+  additionalProperties: false,
+}
+
+/** System prompt for the pre-review planner (ported from the upstream plan task). */
+export const PLAN_SYSTEM_PROMPT = `You are an expert in code review task planning. Your responsibility is to analyze the code changes and produce a structured review plan: the risk points worth checking, and the context checks that would confirm each one.
+
+## Analysis Rules
+1. **Scope**: Only analyze newly added and modified code; ignore deleted code.
+2. **Ordering**: Issues sorted by severity in descending order (high → medium → low).
+3. **Severity Definitions**:
+   - \`high\`: May cause security vulnerabilities, data loss, system crashes, or critical functional failures
+   - \`medium\`: May affect performance, maintainability, or involve potential edge-case problems
+   - \`low\`: Code style, readability, or non-critical best practice suggestions
+4. **Context checks**: \`tool_plan\` lines are intentions for the reviewer, not actions — describe what to read or search and why it would confirm the risk.
+5. **Description Requirements**: Each issue description must cover three dimensions — problem location, nature of the problem, and potential impact.
+6. **Empty Result**: If the changes carry no identifiable risk, return an empty \`issues\` array. Do not invent issues to fill the list.
+
+## Output
+Return one structured document: \`summary\` (brief purpose and scope of the change) and \`issues\` (the risk points, most severe first).`
+
+/**
+ * Build the planner's user message (ported from the upstream plan task).
+ * @param params - Bundle diffs, sibling changes, rule checklist, and context.
+ * @returns The composed user prompt.
+ */
+export function planUserPrompt(params: {
+  otherChangedFiles: string[]
+  diffs: string
+  ruleText: string
+  background?: string
+  now: string
+}): string {
+  const others = params.otherChangedFiles.length > 0 ? params.otherChangedFiles.join('\n') : '(none)'
+  const background = params.background?.trim() ? params.background.trim() : '(not provided)'
+  return `Other files changed in this update (not in this review group):
+<other_changed_files>
+${others}
+</other_changed_files>
+
+<review_files>
+${params.diffs}
+</review_files>
+
+Current time in the real world: ${params.now}
+
+### Requirement Background (Optional)
+${background}
+
+### Review Checklist
+${params.ruleText}
+
+### Task
+Please analyze the code changes above and return the structured review plan.`
+}
+
+/** One planned risk point. */
+export interface PlannedIssue {
+  severity: string
+  description: string
+  toolPlan: string[]
+}
+
+/** One bundle's pre-review plan. */
+export interface ReviewPlan {
+  summary: string
+  issues: PlannedIssue[]
+}
+
+/**
+ * Admit a planner's structured document; malformed entries are dropped here.
+ * @param raw - The untrusted structured document.
+ * @returns The admitted plan (empty summary and issues when unusable).
+ */
+export function normalizePlan(raw: unknown): ReviewPlan {
+  if (!isRecord(raw)) return { summary: '', issues: [] }
+  const summary = typeof raw['summary'] === 'string' ? raw['summary'] : ''
+  const entries = raw['issues']
+  const issues: PlannedIssue[] = []
+  if (Array.isArray(entries)) {
+    for (const entry of entries) {
+      if (!isRecord(entry)) continue
+      const description = typeof entry['description'] === 'string' ? entry['description'] : ''
+      const severity = typeof entry['severity'] === 'string' && ['high', 'medium', 'low'].includes(entry['severity'])
+        ? entry['severity']
+        : 'medium'
+      if (description === '') continue
+      const toolPlan = Array.isArray(entry['tool_plan'])
+        ? entry['tool_plan'].filter((line): line is string => typeof line === 'string' && line.trim() !== '')
+        : []
+      issues.push({ severity, description, toolPlan })
+    }
+  }
+  return { summary, issues }
+}
+
+/**
+ * Render a plan as the review prompt's guidance block: the upstream plain-text
+ * shape (Summary line, numbered severity-tagged issues, `→` context checks).
+ * @param plan - The admitted plan.
+ * @returns The guidance text, or the empty string when the plan carries nothing.
+ */
+export function renderPlanGuidance(plan: ReviewPlan): string {
+  if (plan.summary.trim() === '' && plan.issues.length === 0) return ''
+  const lines = [`Summary: ${plan.summary.trim()}`]
+  plan.issues.forEach((issue, index) => {
+    lines.push(`${index + 1}. [${issue.severity}] ${issue.description.trim()}`)
+    for (const step of issue.toolPlan) lines.push(`   → ${step.trim()}`)
+  })
+  return lines.join('\n')
+}
+
+/* ─────────────────────── comment relocation (LLM fallback) ─────────────────────── */
+
+/** Structured-output schema for one relocation batch. */
+export const RELOCATE_OUTPUT_SCHEMA: ObjectJsonSchema = {
+  type: 'object',
+  properties: {
+    locations: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          index: { type: 'integer', description: 'The comment number from the request' },
+          snippet: {
+            type: 'string',
+            description: "Verbatim added lines copied from the diff, markers stripped, joined with newlines",
+          },
+        },
+        required: ['index', 'snippet'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['locations'],
+  additionalProperties: false,
+}
+
+/** System prompt for comment relocation (ported from the upstream re-location task). */
+export const RELOCATE_SYSTEM_PROMPT = `You are a code location assistant. Given a unified diff and review comments, your sole task is to extract the exact code snippet from the diff that each comment refers to.`
+
+/**
+ * Build the relocation batch's user message.
+ * @param params - The bundle diff and the comments that failed deterministic anchoring.
+ * @returns The composed user prompt.
+ */
+export function relocateUserPrompt(params: {
+  diffs: string
+  comments: Array<{ index: number; content: string; startLine?: number; snippet?: string }>
+}): string {
+  const list = params.comments
+    .map(comment => {
+      const at = comment.startLine !== undefined ? ` (claimed line ${comment.startLine})` : ''
+      const prior = comment.snippet !== undefined ? `\n   previous snippet (failed to match): ${JSON.stringify(comment.snippet)}` : ''
+      return `${comment.index}. ${comment.content}${at}${prior}`
+    })
+    .join('\n')
+  return `Below is a unified diff and review comments whose positions could not be matched. For each comment, identify the minimal contiguous range of ADDED lines (lines starting with \`+\`) that it targets.
+
+Rules:
+1. Copy the relevant lines VERBATIM from the diff — do not rewrite, reformat, or add anything.
+2. Strip the leading \`+\` marker from each copied line.
+3. Include only the lines directly related to the issue — no surrounding context.
+4. If multiple disjoint locations apply, pick the single most relevant one. If none applies, omit that comment.
+5. Return one structured document with a \`locations\` entry per matched comment.
+
+**Diff:**
+\`\`\`diff
+${params.diffs}\`\`\`
+
+**Review comments:**
+${list}`
+}
+
+/**
+ * Admit a relocation batch's structured document: indices address the request's
+ * comment list; empty snippets are dropped.
+ * @param raw - The untrusted structured document.
+ * @param batchSize - The number of comments the worker was shown.
+ * @returns Matched snippets keyed by request index.
+ */
+export function parseRelocatedSnippets(raw: unknown, batchSize: number): Map<number, string> {
+  const snippets = new Map<number, string>()
+  if (!isRecord(raw)) return snippets
+  const locations = raw['locations']
+  if (!Array.isArray(locations)) return snippets
+  for (const entry of locations) {
+    if (!isRecord(entry)) continue
+    const index = entry['index']
+    const snippet = entry['snippet']
+    if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= batchSize) continue
+    if (typeof snippet !== 'string' || snippet.trim() === '') continue
+    snippets.set(index, snippet)
+  }
+  return snippets
 }

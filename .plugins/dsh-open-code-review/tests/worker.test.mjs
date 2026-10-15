@@ -5,7 +5,15 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeComments, parseFilterVerdict, isSeverity, isCategory } from '../lib/worker.js'
+import {
+  normalizeComments,
+  parseFilterVerdict,
+  isSeverity,
+  isCategory,
+  normalizePlan,
+  renderPlanGuidance,
+  parseRelocatedSnippets,
+} from '../lib/worker.js'
 
 test('normalizeComments maps the wire document to raw comments', () => {
   const raw = {
@@ -80,4 +88,39 @@ test('vocabulary guards accept only the shared lists', () => {
   assert.equal(isCategory('security'), true)
   assert.equal(isCategory('other'), true)
   assert.equal(isCategory(undefined), false)
+})
+
+test('normalizePlan admits issues, defaults severity, drops malformed entries', () => {
+  const plan = normalizePlan({
+    summary: 's',
+    issues: [
+      { severity: 'critical', description: 'keeps description' },
+      { severity: 'low', description: 'ok', tool_plan: ['read x', '', 7] },
+      { description: 42 },
+      'nope',
+    ],
+  })
+  assert.equal(plan.summary, 's')
+  assert.equal(plan.issues.length, 2)
+  assert.equal(plan.issues[0].severity, 'medium')
+  assert.deepEqual(plan.issues[1].toolPlan, ['read x'])
+  assert.deepEqual(normalizePlan(null), { summary: '', issues: [] })
+})
+
+test('renderPlanGuidance reproduces the upstream plain-text shape', () => {
+  const text = renderPlanGuidance({
+    summary: 'scope',
+    issues: [{ severity: 'high', description: 'risk', toolPlan: ['read a.ts — why'] }],
+  })
+  assert.equal(text, 'Summary: scope\n1. [high] risk\n   → read a.ts — why')
+  assert.equal(renderPlanGuidance({ summary: '', issues: [] }), '')
+})
+
+test('parseRelocatedSnippets bounds indices and drops empty snippets', () => {
+  const snippets = parseRelocatedSnippets(
+    { locations: [{ index: 0, snippet: 'const a = 1' }, { index: 5, snippet: 'x' }, { index: 1, snippet: '   ' }] },
+    2,
+  )
+  assert.deepEqual([...snippets.entries()], [[0, 'const a = 1']])
+  assert.equal(parseRelocatedSnippets(null, 2).size, 0)
 })

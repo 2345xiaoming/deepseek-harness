@@ -21,16 +21,25 @@ import type { RawComment, ReviewWorker } from './worker.ts'
 import {
   FILTER_OUTPUT_SCHEMA,
   FILTER_SYSTEM_PROMPT,
+  PLAN_OUTPUT_SCHEMA,
+  PLAN_SYSTEM_PROMPT,
+  RELOCATE_OUTPUT_SCHEMA,
+  RELOCATE_SYSTEM_PROMPT,
   REVIEW_OUTPUT_SCHEMA,
   REVIEW_SYSTEM_PROMPT,
   filterUserPrompt,
   isCategory,
   isSeverity,
   normalizeComments,
+  normalizePlan,
   parseFilterVerdict,
+  parseRelocatedSnippets,
+  planUserPrompt,
+  relocateUserPrompt,
+  renderPlanGuidance,
   reviewUserPrompt,
 } from './worker.ts'
-import { positionComments } from './relocate.ts'
+import { positionComment, positionComments } from './relocate.ts'
 import type { PositionedComment } from './relocate.ts'
 
 /** Options for {@link runReview}. */
@@ -46,6 +55,10 @@ export interface RunReviewInput {
   concurrency: number
   /** Current timestamp shown to workers. */
   now: string
+  /** Run a pre-review plan task per bundle and feed its guidance to the review worker. */
+  plan: boolean
+  /** Comment-positioning strategy: deterministic only, or with the LLM relocation fallback. */
+  relocation: 'deterministic' | 'llm'
   signal: AbortSignal
 }
 
@@ -55,7 +68,9 @@ interface RunState {
   skipped: ExcludedFile[]
   bundleOutcomes: BundleOutcome[]
   filteredCount: number
+  planRuns: number
   filterRuns: number
+  relocated: number
   reviewedPaths: Set<string>
 }
 
@@ -70,7 +85,7 @@ interface RunState {
 export async function runReview(input: RunReviewInput): Promise<ReviewResult> {
   const started = Date.now()
   const { spec, worker, signal } = input
-  const state: RunState = { findings: [], skipped: [], bundleOutcomes: [], filteredCount: 0, filterRuns: 0, reviewedPaths: new Set() }
+  const state: RunState = { findings: [], skipped: [], bundleOutcomes: [], filteredCount: 0, planRuns: 0, filterRuns: 0, relocated: 0, reviewedPaths: new Set() }
   const ruleByFile = new Map<string, RuleGroup>()
   for (const group of spec.ruleGroups) for (const file of group.files) ruleByFile.set(file, group)
 
@@ -86,21 +101,28 @@ export async function runReview(input: RunReviewInput): Promise<ReviewResult> {
       .map(file => `<file path="${file}" status="${statusOf(spec, file)}">\n${diffByPath.get(file) ?? ''}\n</file>`)
       .join('\n')
     const ruleText = checklistFor(ruleByFile, bundle.files)
+    const otherChanged = otherFiles.filter(line => !bundle.files.some(file => line.endsWith(` ${file}`)))
     try {
+      const planGuidance = input.plan
+        ? await planBundle(worker, otherChanged, diffs, ruleText, input, state, bundle.id, signal)
+        : undefined
       const raw = await worker.run({
         label: `ocr review bundle ${bundle.id}`,
         system: REVIEW_SYSTEM_PROMPT,
         user: reviewUserPrompt({
-          otherChangedFiles: otherFiles.filter(line => !bundle.files.some(file => line.endsWith(` ${file}`))),
+          otherChangedFiles: otherChanged,
           diffs,
           ruleText,
+          ...(planGuidance !== undefined ? { planGuidance } : {}),
           ...(input.background !== undefined ? { background: input.background } : {}),
           now: input.now,
         }),
         schema: REVIEW_OUTPUT_SCHEMA,
       }, signal)
       const comments = normalizeComments(raw, bundle.files)
-      const positioned = positionComments(comments, diffByPath)
+      const positioned = input.relocation === 'llm'
+        ? await relocateBundle(worker, diffs, positionComments(comments, diffByPath), state, bundle.id, signal)
+        : positionComments(comments, diffByPath)
       const removed = await filterBundle(worker, diffs, positioned.map(entry => entry.comment), input, state)
       let findingCount = 0
       positioned.forEach((entry, index) => {
@@ -137,9 +159,99 @@ export async function runReview(input: RunReviewInput): Promise<ReviewResult> {
     stats: {
       worker: worker.kind,
       bundles: spec.bundles.length,
+      planRuns: state.planRuns,
       filterRuns: state.filterRuns,
+      relocated: state.relocated,
       durationMs: Date.now() - started,
     },
+  }
+}
+
+/**
+ * Run the pre-review planner for one bundle and render its guidance. Fail-open:
+ * a failed plan leaves the review running without guidance.
+ * @returns The guidance block, or undefined when planning failed or produced nothing.
+ */
+async function planBundle(
+  worker: ReviewWorker,
+  otherChanged: string[],
+  diffs: string,
+  ruleText: string,
+  input: RunReviewInput,
+  state: RunState,
+  bundleId: number,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  try {
+    const raw = await worker.run({
+      label: `ocr review plan ${bundleId}`,
+      system: PLAN_SYSTEM_PROMPT,
+      user: planUserPrompt({
+        otherChangedFiles: otherChanged,
+        diffs,
+        ruleText,
+        ...(input.background !== undefined ? { background: input.background } : {}),
+        now: input.now,
+      }),
+      schema: PLAN_OUTPUT_SCHEMA,
+    }, signal)
+    state.planRuns += 1
+    const guidance = renderPlanGuidance(normalizePlan(raw))
+    return guidance === '' ? undefined : guidance
+  } catch (error) {
+    if (signal.aborted) throw error
+    return undefined
+  }
+}
+
+/**
+ * LLM relocation fallback: ask the worker for the added lines each unanchored
+ * comment targets, then re-run the deterministic matcher on the returned
+ * snippets. Fail-open: a failed relocation leaves positions as they were.
+ * @returns Positioned comments with any successfully re-anchored entries replaced.
+ */
+async function relocateBundle(
+  worker: ReviewWorker,
+  diffs: string,
+  positioned: PositionedComment[],
+  state: RunState,
+  bundleId: number,
+  signal: AbortSignal,
+): Promise<PositionedComment[]> {
+  const failures = positioned
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => !entry.positionVerified)
+  if (failures.length === 0) return positioned
+  try {
+    const raw = await worker.run({
+      label: `ocr review relocate ${bundleId}`,
+      system: RELOCATE_SYSTEM_PROMPT,
+      user: relocateUserPrompt({
+        diffs,
+        comments: failures.map(({ entry }, batchIndex) => ({
+          index: batchIndex,
+          content: entry.comment.content,
+          ...(entry.comment.startLine !== undefined ? { startLine: entry.comment.startLine } : {}),
+          ...(entry.comment.snippet !== undefined ? { snippet: entry.comment.snippet } : {}),
+        })),
+      }),
+      schema: RELOCATE_OUTPUT_SCHEMA,
+    }, signal)
+    const snippets = parseRelocatedSnippets(raw, failures.length)
+    if (snippets.size === 0) return positioned
+    const next = [...positioned]
+    for (const [batchIndex, snippet] of snippets) {
+      const target = failures[batchIndex]
+      if (target === undefined) continue
+      const retry = positionComment({ ...target.entry.comment, snippet }, diffs)
+      if (!retry.positionVerified) continue
+      next[target.index] = retry
+      state.relocated += 1
+    }
+    return next
+  } catch (error) {
+    if (signal.aborted) throw error
+    return positioned
   }
 }
 
