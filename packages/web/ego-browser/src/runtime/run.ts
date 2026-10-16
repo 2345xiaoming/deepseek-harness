@@ -1,9 +1,4 @@
 // @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
-import {
-  stdin as processStdin,
-  stdout as processStdout,
-  stderr as processStderr,
-} from 'node:process'
 import { parse } from 'acorn'
 
 import { formatCliLogValue } from './format.ts'
@@ -70,8 +65,8 @@ export const USAGE = `Usage:
  */
 export async function runMain(options: RunMainOptions = {}): Promise<0 | 2> {
   const argv = options.argv || process.argv.slice(2)
-  const stdout = options.stdout || processStdout
-  const stderr = options.stderr || processStderr
+  const stdout = options.stdout || process.stdout
+  const stderr = options.stderr || process.stderr
 
   if (argv[0] === '-h' || argv[0] === '--help') {
     write(stdout, HELP)
@@ -85,7 +80,7 @@ export async function runMain(options: RunMainOptions = {}): Promise<0 | 2> {
   const code =
     options.stdinText !== undefined
       ? options.stdinText
-      : await readAll(options.stdin || processStdin)
+      : await readAll(options.stdin || process.stdin)
   if (!code.trim()) {
     write(stderr, USAGE)
     return 2

@@ -1,7 +1,6 @@
 // @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 import { existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { loadEnvFile as loadNodeEnvFile } from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url))
@@ -41,7 +40,7 @@ function loadEnvFile(path) {
   if (!existsSync(path)) {
     return
   }
-  loadNodeEnvFile(path)
+  process.loadEnvFile(path)
 }
 
 /**
