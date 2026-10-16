@@ -398,11 +398,9 @@ export function redactStatusError(message: string, entry: McpServerEntry, mounte
     for (const value of Object.values(stored[field] ?? {})) secrets.add(value)
   }
   if (mounted !== undefined) {
-    // Both transports carry their secret maps under these two keys.
-    const live = mounted as unknown as Record<string, Record<string, string> | undefined>
-    for (const field of SECRET_FIELDS) {
-      for (const value of Object.values(live[field] ?? {})) secrets.add(value)
-    }
+    // Each transport names its secret map once; the discriminant selects it.
+    const live = mounted.transport === 'stdio' ? mounted.env : mounted.headers
+    for (const value of Object.values(live)) secrets.add(value)
   }
   let output = message
   // Longest first: a secret containing another secret's text must not leave a
