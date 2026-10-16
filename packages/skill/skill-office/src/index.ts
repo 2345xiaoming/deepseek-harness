@@ -12,6 +12,9 @@ import { parse as parseYaml } from 'yaml'
 
 const SKILL_NAMES = ['office-docx', 'office-pptx', 'office-xlsx'] as const
 
+/** Shared ground rules appended to every Office skill body. */
+const COMMON_SKILL_FILE = 'office-common.md'
+
 /** Office skill resource location. */
 export interface Config {
   /** Absolute assets directory containing the three skill folders and shared scripts; defaults to packaged assets. */
@@ -72,6 +75,9 @@ export function apply(ctx: Context, config: Config = {}): void {
   if (!statSync(join(assetRoot, 'scripts', 'check_office.py')).isFile()) {
     throw new Error('skill-office: assets must contain scripts/check_office.py')
   }
+  const commonPath = join(assetRoot, COMMON_SKILL_FILE)
+  if (!statSync(commonPath).isFile()) throw new Error(`skill-office: assets must contain ${COMMON_SKILL_FILE}`)
+  const common = readFileSync(commonPath, 'utf8').trim()
   const runtime = officeRuntime(config)
   const candidates: SkillCandidate[] = SKILL_NAMES.map((skillName) => {
     const directory = join(assetRoot, skillName)
@@ -90,7 +96,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     async get(candidate, options) {
       const { rank: _rank, locator, ...summary } = candidate
       const raw = await readFile(locator as string, { encoding: 'utf8', signal: options.signal })
-      return { ...summary, content: parseSkill(raw, locator as string).content + runtime }
+      return { ...summary, content: `${parseSkill(raw, locator as string).content}\n\n${common}${runtime}` }
     },
   }
   ctx.skills.registerProvider(() => provider)

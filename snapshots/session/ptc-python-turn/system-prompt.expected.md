@@ -104,6 +104,53 @@ class BashOutput3(TypedDict):
     stderr: BashOutput3Stderr
     sandbox: NotRequired[BashOutput3Sandbox]
 
+class BrowserClickArgs(TypedDict):
+    # @N ref, loc=..., xpath=..., or CSS selector.
+    target: str
+    # Timeout ms (default 10000; element resolution has its own internal bounds).
+    timeout: NotRequired[float]
+    # Additional keys beyond those declared are allowed.
+
+class BrowserGotoArgs(TypedDict):
+    # Absolute URL to navigate to.
+    url: str
+    # Timeout ms (default 20000).
+    timeout: NotRequired[float]
+    # Additional keys beyond those declared are allowed.
+
+class BrowserJsArgs(TypedDict):
+    # JavaScript expression or statement body.
+    expression: str
+    # Additional keys beyond those declared are allowed.
+
+class BrowserRunArgs(TypedDict):
+    # JavaScript body (await allowed). Use console.log(...) for output.
+    js: str
+    # Additional keys beyond those declared are allowed.
+
+class BrowserScreenshotArgs(TypedDict):
+    # Absolute output PNG path (default: temp file).
+    path: NotRequired[str]
+    # Capture the full scrollable page (default false).
+    fullPage: NotRequired[bool]
+    # Additional keys beyond those declared are allowed.
+
+class BrowserSnapshotArgs(TypedDict):
+    # only_within_viewport | full_page (default full_page)
+    scope: NotRequired[str]
+    # Additional keys beyond those declared are allowed.
+
+class BrowserWaitArgs(TypedDict):
+    # @N ref, loc=..., xpath=..., or CSS selector to wait for.
+    selector: NotRequired[str]
+    # attached | visible (default attached).
+    state: NotRequired[str]
+    # load | networkidle (when waiting for a load state).
+    loadState: NotRequired[str]
+    # Timeout ms (default 10000).
+    timeout: NotRequired[float]
+    # Additional keys beyond those declared are allowed.
+
 class CreateGoalArgs(TypedDict):
     # The concrete completion objective inferred from the direct human request.
     objective: str
@@ -513,6 +560,20 @@ class WriteOutput(TypedDict):
 class Tools(Protocol):
     async def bash(self, args: BashArgs) -> BashOutput1 | BashOutput2 | BashOutput3:
         """Execute a bash command (`bash -c`) and return its stdout/stderr. Each call runs in a fresh shell; pass `workdir` instead of using `cd`. Managed `$DSH_*` variables expose current harness environment facts. Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. Provide `description` before `command` in the arguments. Before any delete or move, verify that the resolved absolute target path is the intended one; never run it against a computed path you have not checked. An unset variable expands to an empty string, so guard variables in such paths with `${VAR:?}`. Commands may run under a file sandbox; a blocked file operation is reported as `[sandbox: file access denied under <mode> mode]`, a policy denial: do not retry another way."""
+    async def browser_click(self, args: BrowserClickArgs) -> str:
+        """Click an element by snapshot ref (@N) or locator (loc=css:, loc=role:, xpath=, or raw CSS)."""
+    async def browser_goto(self, args: BrowserGotoArgs) -> str:
+        """Navigate the current tab (or open/reuse a matching tab) to a URL and wait for it to load."""
+    async def browser_js(self, args: BrowserJsArgs) -> str:
+        """Evaluate JavaScript in the current page and return the serialized result. The result is the script's completion value or an explicit `return`; top-level `await` is supported."""
+    async def browser_run(self, args: BrowserRunArgs) -> str:
+        """Run an ego-browser helper script: arbitrary JS with the full v2 harness face (flat helpers: snapshot/gotoAndWait/click/js/captureScreenshot/waitForElement/cdp/browserFetch; task-space API: taskSpace()/newTaskSpace()/claimTaskSpace()/listTaskSpaces(); site skills: runSiteTool/learnContext). console.log(...) inside the script is captured and returned as the tool result."""
+    async def browser_screenshot(self, args: BrowserScreenshotArgs) -> str:
+        """Capture a screenshot of the current page to a PNG file and return its path."""
+    async def browser_snapshot(self, args: BrowserSnapshotArgs) -> str:
+        """Read an accessibility snapshot of the current page: a text outline plus @N snapshot refs for interacting with elements."""
+    async def browser_wait(self, args: BrowserWaitArgs) -> bool:
+        """Wait until an element matches a selector (optionally visible) or the page reaches a load state."""
     async def create_goal(self, args: CreateGoalArgs) -> CreateGoalOutput1 | CreateGoalOutput2:
         """Create a persisted goal that keeps this session working across automatic continuation rounds. Use it when the direct human request is a long-running objective, even if the user did not say \"goal\"; not for single-turn work."""
     async def edit(self, args: EditArgs) -> EditOutput:

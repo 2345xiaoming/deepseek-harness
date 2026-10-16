@@ -96,7 +96,8 @@ describe('bundled Office skills', () => {
       await ctx.plugin(SkillOffice, { assetRoot: root, cli: false })
       const skill = await ctx.skills.get('office-docx')
       expect(skill?.description).toBe(description)
-      expect(skill?.content).toBe(body.replaceAll('\n', newline) + '\n\nLibreOffice Kit is disabled in this deployment.')
+      const common = (await readFile(join(root, 'office-common.md'), 'utf8')).trim()
+      expect(skill?.content).toBe(`${body.replaceAll('\n', newline)}\n\n${common}\n\nLibreOffice Kit is disabled in this deployment.`)
     } finally {
       await ctx.fiber.dispose()
       await rm(root, { recursive: true, force: true })
@@ -115,6 +116,11 @@ describe('bundled Office skills', () => {
       expect(() => { SkillOffice.apply(ctx, { assetRoot: root }) }).toThrow('scripts/check_office.py')
       await rm(join(root, 'scripts', 'check_office.py'), { recursive: true })
       await cp(join(assets, 'scripts', 'check_office.py'), join(root, 'scripts', 'check_office.py'))
+      await rm(join(root, 'office-common.md'))
+      await cp(join(assets, 'office-docx'), join(root, 'office-common.md'), { recursive: true })
+      expect(() => { SkillOffice.apply(ctx, { assetRoot: root }) }).toThrow('office-common.md')
+      await rm(join(root, 'office-common.md'), { recursive: true })
+      await cp(join(assets, 'office-common.md'), join(root, 'office-common.md'))
       await writeFile(join(root, 'office-docx', 'SKILL.md'), '# Missing frontmatter\ndescription: body text\n')
       expect(() => { SkillOffice.apply(ctx, { assetRoot: root }) }).toThrow('has no YAML frontmatter')
       for (const header of ['', 'null', 'scalar', 'name: office-docx', 'description: 3', 'description: ""']) {

@@ -15,19 +15,7 @@ A declaration row has these `config` fields: `id` (required, lowercase letters, 
 
 ## Create a preset
 
-Write a bundle directory in the workspace with exactly two files, then install it.
-
-`review-preset/package.json`:
-
-```json
-{
-  "name": "@local/dsh-review-preset",
-  "version": "1.0.0",
-  "private": true,
-  "type": "module",
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
-}
-```
+Write a bundle directory in the workspace with exactly two files, then install it; [bundle-install.md](../cordis-composition-reference/references/bundle-install.md) states that layout, the install call, and the profile writes it forbids.
 
 `review-preset/cordis.patch.yml`:
 
@@ -49,7 +37,7 @@ Write a bundle directory in the workspace with exactly two files, then install i
             name: '@deepseek-ai/dsh-tool-bash'
 ```
 
-Install with `plugin_manager`, `action: install_bundle`, `target` set to the absolute bundle directory. It runs package installation and bundle selection itself; do not reproduce those steps with shell commands.
+Install the bundle with `plugin_manager` `install_bundle` as [bundle-install.md](../cordis-composition-reference/references/bundle-install.md) describes; do not reproduce its steps with shell commands.
 
 ## Change a shipped preset
 

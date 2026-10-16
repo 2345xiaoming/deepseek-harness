@@ -117,6 +117,8 @@ Before pushing, follow [dsh-pre-push-checks](.agents/skills/dsh-pre-push-checks/
 - `test:coverage`, not `test`, is the CI coverage gate ([why](docs/testing.md)).
 - **Web browser automation and GIF recording:** launch with `pnpm dsh web --patch apps/web/tests/pin-browse-picker.overlay.yml` to use the [in-page directory picker](apps/web/tests/pin-browse-picker.overlay.yml); omit this override only when testing native picker behavior explicitly.
 
+- **Library/API docs:** use Context7 MCP (`mcp__context7__resolve-library-id`, `mcp__context7__query-docs`); bridge: [packages/mcp/mcp-client/README.md](packages/mcp/mcp-client/README.md).
+
 ## Secrets / .env
 
 Windows packaging/signing: [required reading](apps/desktop/README.md#windows-ev-signing).

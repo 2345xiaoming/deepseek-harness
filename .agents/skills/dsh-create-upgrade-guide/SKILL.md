@@ -43,7 +43,7 @@ Start from the [upgrade-guide template](../dsh-doc/templates/upgrade-guide.md). 
 
 When a guide needs more than 500 words, the extra text belongs elsewhere: link source files or symbols instead of restating code, move rationale into an [Agent Note](../../notes/README.md), and turn repeated mechanical steps into a script or `dsh` command that the guide invokes.
 
-Follow [dsh-prose-standard](../dsh-prose-standard/SKILL.md). Write the Chinese counterpart in the same change under the [bilingual pairing rules](../../../docs/AGENTS.md), then record the pair with `pnpm run verify-translation-pairing --write docs/upgrade-guide/v<version>/<item>/guide.md`.
+Follow [dsh-prose-standard](../dsh-prose-standard/SKILL.md). Write the Chinese counterpart in the same change under the [pairing contract](../../../docs/i18n/README.md), then record the pair with `pnpm run verify-translation-pairing --write docs/upgrade-guide/v<version>/<item>/guide.md`.
 
 ## Verify
 

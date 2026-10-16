@@ -1077,9 +1077,9 @@ describe('compat switches', () => {
   })
 
   it('serves the Responses compat type on every protocol pi-ai gives it to', () => {
-    // pi-ai types azure-openai-responses and openai-codex-responses with the
-    // same OpenAIResponsesCompat, so a switch settable on one is settable on all.
-    for (const route of ['azure-openai-responses', 'openai-codex']) {
+    // pi-ai types the azure-openai-responses and openai-codex-responses APIs with
+    // one OpenAIResponsesCompat, so a switch settable on one is settable on all.
+    for (const route of ['azure', 'openai-codex']) {
       const models = modelsOf({ [route]: { compat: { supportsDeveloperRole: false } } }, route)
       const [first] = [...models.values()]
       expect((first?.compat as { supportsDeveloperRole?: boolean }).supportsDeveloperRole).toBe(false)
