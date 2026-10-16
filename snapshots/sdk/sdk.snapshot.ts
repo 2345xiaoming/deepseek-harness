@@ -163,7 +163,7 @@ const SDK_ASSERTIONS: Readonly<Record<string, SdkAssertions>> = {
   },
   'persistent-tools': {
     environment: { DSH_SYSTEM_PROMPT: MINIMAL_SYSTEM_PROMPT },
-    expectedTools: { bash: ['command'], str_replace_editor: ['command', 'path'], working_directory: [] },
+    expectedTools: { bash: ['command'], browser_click: ['target'], browser_goto: ['url'], browser_js: ['expression'], browser_run: ['js'], browser_screenshot: [], browser_snapshot: [], browser_wait: [], str_replace_editor: ['command', 'path'], working_directory: [] },
     expectedSystem: MINIMAL_SYSTEM_PROMPT,
     expectedToolDescriptions: { bash: MINIMAL_BASH_DESCRIPTION },
     runtimeContext: {
