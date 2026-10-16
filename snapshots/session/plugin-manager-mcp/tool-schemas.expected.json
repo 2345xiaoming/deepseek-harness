@@ -46,6 +46,133 @@
       }
     },
     {
+      "name": "browser_click",
+      "description": "Click an element by snapshot ref (@N) or locator (loc=css:, loc=role:, xpath=, or raw CSS).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "@N ref, loc=..., xpath=..., or CSS selector."
+          },
+          "timeout": {
+            "type": "number",
+            "description": "Timeout ms (default 10000; element resolution has its own internal bounds)."
+          }
+        },
+        "required": [
+          "target"
+        ]
+      }
+    },
+    {
+      "name": "browser_goto",
+      "description": "Navigate the current tab (or open/reuse a matching tab) to a URL and wait for it to load.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Absolute URL to navigate to."
+          },
+          "timeout": {
+            "type": "number",
+            "description": "Timeout ms (default 20000)."
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    },
+    {
+      "name": "browser_js",
+      "description": "Evaluate JavaScript in the current page and return the serialized result.\nThe result is the script's completion value or an explicit `return`; top-level `await` is supported.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "expression": {
+            "type": "string",
+            "description": "JavaScript expression or statement body."
+          }
+        },
+        "required": [
+          "expression"
+        ]
+      }
+    },
+    {
+      "name": "browser_run",
+      "description": "Run an ego-browser helper script: arbitrary JS with the full v2 harness face (flat helpers: snapshot/gotoAndWait/click/js/captureScreenshot/waitForElement/cdp/browserFetch; task-space API: taskSpace()/newTaskSpace()/claimTaskSpace()/listTaskSpaces(); site skills: runSiteTool/learnContext). console.log(...) inside the script is captured and returned as the tool result.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "js": {
+            "type": "string",
+            "description": "JavaScript body (await allowed). Use console.log(...) for output."
+          }
+        },
+        "required": [
+          "js"
+        ]
+      }
+    },
+    {
+      "name": "browser_screenshot",
+      "description": "Capture a screenshot of the current page to a PNG file and return its path.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute output PNG path (default: temp file)."
+          },
+          "fullPage": {
+            "type": "boolean",
+            "description": "Capture the full scrollable page (default false)."
+          }
+        }
+      }
+    },
+    {
+      "name": "browser_snapshot",
+      "description": "Read an accessibility snapshot of the current page: a text outline plus @N snapshot refs for interacting with elements.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "only_within_viewport | full_page (default full_page)"
+          }
+        }
+      }
+    },
+    {
+      "name": "browser_wait",
+      "description": "Wait until an element matches a selector (optionally visible) or the page reaches a load state.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "string",
+            "description": "@N ref, loc=..., xpath=..., or CSS selector to wait for."
+          },
+          "state": {
+            "type": "string",
+            "description": "attached | visible (default attached)."
+          },
+          "loadState": {
+            "type": "string",
+            "description": "load | networkidle (when waiting for a load state)."
+          },
+          "timeout": {
+            "type": "number",
+            "description": "Timeout ms (default 10000)."
+          }
+        }
+      }
+    },
+    {
       "name": "create_goal",
       "description": "Create a persisted goal that keeps this session working across automatic continuation rounds. Use it when the direct human request is a long-running objective, even if the user did not say \"goal\"; not for single-turn work.",
       "parameters": {
@@ -737,6 +864,133 @@
             "description",
             "command"
           ]
+        }
+      },
+      {
+        "name": "browser_click",
+        "description": "Click an element by snapshot ref (@N) or locator (loc=css:, loc=role:, xpath=, or raw CSS).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "@N ref, loc=..., xpath=..., or CSS selector."
+            },
+            "timeout": {
+              "type": "number",
+              "description": "Timeout ms (default 10000; element resolution has its own internal bounds)."
+            }
+          },
+          "required": [
+            "target"
+          ]
+        }
+      },
+      {
+        "name": "browser_goto",
+        "description": "Navigate the current tab (or open/reuse a matching tab) to a URL and wait for it to load.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Absolute URL to navigate to."
+            },
+            "timeout": {
+              "type": "number",
+              "description": "Timeout ms (default 20000)."
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      },
+      {
+        "name": "browser_js",
+        "description": "Evaluate JavaScript in the current page and return the serialized result.\nThe result is the script's completion value or an explicit `return`; top-level `await` is supported.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "expression": {
+              "type": "string",
+              "description": "JavaScript expression or statement body."
+            }
+          },
+          "required": [
+            "expression"
+          ]
+        }
+      },
+      {
+        "name": "browser_run",
+        "description": "Run an ego-browser helper script: arbitrary JS with the full v2 harness face (flat helpers: snapshot/gotoAndWait/click/js/captureScreenshot/waitForElement/cdp/browserFetch; task-space API: taskSpace()/newTaskSpace()/claimTaskSpace()/listTaskSpaces(); site skills: runSiteTool/learnContext). console.log(...) inside the script is captured and returned as the tool result.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "js": {
+              "type": "string",
+              "description": "JavaScript body (await allowed). Use console.log(...) for output."
+            }
+          },
+          "required": [
+            "js"
+          ]
+        }
+      },
+      {
+        "name": "browser_screenshot",
+        "description": "Capture a screenshot of the current page to a PNG file and return its path.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Absolute output PNG path (default: temp file)."
+            },
+            "fullPage": {
+              "type": "boolean",
+              "description": "Capture the full scrollable page (default false)."
+            }
+          }
+        }
+      },
+      {
+        "name": "browser_snapshot",
+        "description": "Read an accessibility snapshot of the current page: a text outline plus @N snapshot refs for interacting with elements.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "description": "only_within_viewport | full_page (default full_page)"
+            }
+          }
+        }
+      },
+      {
+        "name": "browser_wait",
+        "description": "Wait until an element matches a selector (optionally visible) or the page reaches a load state.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "selector": {
+              "type": "string",
+              "description": "@N ref, loc=..., xpath=..., or CSS selector to wait for."
+            },
+            "state": {
+              "type": "string",
+              "description": "attached | visible (default attached)."
+            },
+            "loadState": {
+              "type": "string",
+              "description": "load | networkidle (when waiting for a load state)."
+            },
+            "timeout": {
+              "type": "number",
+              "description": "Timeout ms (default 10000)."
+            }
+          }
         }
       },
       {
