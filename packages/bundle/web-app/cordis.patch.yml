@@ -29,6 +29,13 @@
     path: ':memory:'
     openAt: never
 
+# Browser automation is opt-in per surface: the base row registers no browser
+# tools, so a profile that never drives a browser spends none of its tool-schema
+# or prompt budget on them. The Web surface enables them for its agents.
+- id: ego-browser
+  config:
+    enabled: true
+
 - id: tools
   config:
     # TEMPORARY workaround: DSH_TOOLS_MODE (native|ptc) opts a whole dsh

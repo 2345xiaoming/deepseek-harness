@@ -45,13 +45,6 @@
             "maxTokens": true
           },
           "tools": [
-            "browser_click",
-            "browser_goto",
-            "browser_js",
-            "browser_run",
-            "browser_screenshot",
-            "browser_snapshot",
-            "browser_wait",
             "create_goal",
             "edit",
             "exit_plan_mode",
@@ -108,13 +101,6 @@
             "maxTokens": true
           },
           "tools": [
-            "browser_click",
-            "browser_goto",
-            "browser_js",
-            "browser_run",
-            "browser_screenshot",
-            "browser_snapshot",
-            "browser_wait",
             "create_goal",
             "edit",
             "exit_plan_mode",
@@ -186,13 +172,6 @@
             "maxTokens": true
           },
           "tools": [
-            "browser_click",
-            "browser_goto",
-            "browser_js",
-            "browser_run",
-            "browser_screenshot",
-            "browser_snapshot",
-            "browser_wait",
             "create_goal",
             "edit",
             "exit_plan_mode",

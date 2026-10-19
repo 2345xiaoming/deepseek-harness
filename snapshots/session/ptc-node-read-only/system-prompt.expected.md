@@ -67,53 +67,6 @@ interface ToolArgsMap {
     /** Required with sandbox_permissions: one sentence for the user explaining why this exact command needs the wider access. Use the language of the user’s current request. */
     justification?: string;
   } & Record<string, JsonValue>;
-  /** Click an element by snapshot ref (@N) or locator (loc=css:, loc=role:, xpath=, or raw CSS). */
-  browser_click: {
-    /** @N ref, loc=..., xpath=..., or CSS selector. */
-    target: string;
-    /** Timeout ms (default 10000; element resolution has its own internal bounds). */
-    timeout?: number;
-  } & Record<string, JsonValue>;
-  /** Navigate the current tab (or open/reuse a matching tab) to a URL and wait for it to load. */
-  browser_goto: {
-    /** Absolute URL to navigate to. */
-    url: string;
-    /** Timeout ms (default 20000). */
-    timeout?: number;
-  } & Record<string, JsonValue>;
-  /** Evaluate JavaScript in the current page and return the serialized result. The result is the script's completion value or an explicit `return`; top-level `await` is supported. */
-  browser_js: {
-    /** JavaScript expression or statement body. */
-    expression: string;
-  } & Record<string, JsonValue>;
-  /** Run an ego-browser helper script: arbitrary JS with the full v2 harness face (flat helpers: snapshot/gotoAndWait/click/js/captureScreenshot/waitForElement/cdp/browserFetch; task-space API: taskSpace()/newTaskSpace()/claimTaskSpace()/listTaskSpaces(); site skills: runSiteTool/learnContext). console.log(...) inside the script is captured and returned as the tool result. */
-  browser_run: {
-    /** JavaScript body (await allowed). Use console.log(...) for output. */
-    js: string;
-  } & Record<string, JsonValue>;
-  /** Capture a screenshot of the current page to a PNG file and return its path. */
-  browser_screenshot: {
-    /** Absolute output PNG path (default: temp file). */
-    path?: string;
-    /** Capture the full scrollable page (default false). */
-    fullPage?: boolean;
-  } & Record<string, JsonValue>;
-  /** Read an accessibility snapshot of the current page: a text outline plus @N snapshot refs for interacting with elements. */
-  browser_snapshot: {
-    /** only_within_viewport | full_page (default full_page) */
-    scope?: string;
-  } & Record<string, JsonValue>;
-  /** Wait until an element matches a selector (optionally visible) or the page reaches a load state. */
-  browser_wait: {
-    /** @N ref, loc=..., xpath=..., or CSS selector to wait for. */
-    selector?: string;
-    /** attached | visible (default attached). */
-    state?: string;
-    /** load | networkidle (when waiting for a load state). */
-    loadState?: string;
-    /** Timeout ms (default 10000). */
-    timeout?: number;
-  } & Record<string, JsonValue>;
   /** Create a persisted goal that keeps this session working across automatic continuation rounds. Use it when the direct human request is a long-running objective, even if the user did not say "goal"; not for single-turn work. */
   create_goal: {
     /** The concrete completion objective inferred from the direct human request. */
@@ -354,13 +307,6 @@ interface ToolOutputMap {
       runnerFailed?: boolean;
     };
   };
-  browser_click: string;
-  browser_goto: string;
-  browser_js: string;
-  browser_run: string;
-  browser_screenshot: string;
-  browser_snapshot: string;
-  browser_wait: boolean;
   create_goal: {
     goal: null;
   } | {

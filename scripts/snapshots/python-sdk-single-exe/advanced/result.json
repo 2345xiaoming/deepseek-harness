@@ -202,13 +202,6 @@
             "maxTokens": true
           },
           "tools": [
-            "browser_click",
-            "browser_goto",
-            "browser_js",
-            "browser_run",
-            "browser_screenshot",
-            "browser_snapshot",
-            "browser_wait",
             "cordis_inspect_list",
             "cordis_inspect_query",
             "job_kill",
@@ -305,13 +298,6 @@
             "maxTokens": true
           },
           "tools": [
-            "browser_click",
-            "browser_goto",
-            "browser_js",
-            "browser_run",
-            "browser_screenshot",
-            "browser_snapshot",
-            "browser_wait",
             "cordis_inspect_list",
             "cordis_inspect_query",
             "job_kill",
@@ -1734,13 +1720,6 @@
                 "maxTokens": true
               },
               "tools": [
-                "browser_click",
-                "browser_goto",
-                "browser_js",
-                "browser_run",
-                "browser_screenshot",
-                "browser_snapshot",
-                "browser_wait",
                 "cordis_inspect_list",
                 "cordis_inspect_query",
                 "job_kill",
@@ -1867,13 +1846,6 @@
                 "maxTokens": true
               },
               "tools": [
-                "browser_click",
-                "browser_goto",
-                "browser_js",
-                "browser_run",
-                "browser_screenshot",
-                "browser_snapshot",
-                "browser_wait",
                 "cordis_inspect_list",
                 "cordis_inspect_query",
                 "job_kill",
@@ -2896,13 +2868,6 @@
                 "maxTokens": true
               },
               "tools": [
-                "browser_click",
-                "browser_goto",
-                "browser_js",
-                "browser_run",
-                "browser_screenshot",
-                "browser_snapshot",
-                "browser_wait",
                 "cordis_inspect_list",
                 "cordis_inspect_query",
                 "job_kill",
@@ -3661,13 +3626,6 @@
                 "maxTokens": true
               },
               "tools": [
-                "browser_click",
-                "browser_goto",
-                "browser_js",
-                "browser_run",
-                "browser_screenshot",
-                "browser_snapshot",
-                "browser_wait",
                 "cordis_inspect_list",
                 "cordis_inspect_query",
                 "job_kill",
