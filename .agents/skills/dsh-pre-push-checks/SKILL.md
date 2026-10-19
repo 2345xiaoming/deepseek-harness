@@ -37,6 +37,7 @@ When the outgoing change adds or changes a resource-owning or asynchronous test,
 - **Expected-output placement:** a test whose selected recorded Session generation is replay input and expected persisted output belongs under top-level `snapshots/`, with `snapshot.yml` naming its shipped `dsh` profile and composition/header pin. Canonical parent files are `session[.vN].jsonl`, children are `session.<ordinal>[.vN].jsonl`, and the harness selects the highest generation per role. ARIA, geometry, generator, CLI, and unit expectations without that Session round trip stay beside their owning test under `tests/expected/`; do not place them in `snapshots/` or give them a `*.snapshot.ts` owner. Use the owning `test:expected`, `test:web`, or `test` lane.
 - **Profile and configuration placement:** cross-package behavior of a shipped `dsh` profile belongs under `apps/cli/tests/profiles/`; a package-specific Loader composition belongs under that package's `tests/fixtures/`. User-facing optional overlays live under `apps/cli/config/examples/` and pair with a guide under `docs/user/`.
 - **Package manifests, public exports, build configuration, worker/bin entries, or built runtime paths:** run `pnpm run build`, the relevant hygiene checks, and the owning built-artifact smoke.
+- **Repository test and script types:** `pnpm run build:artifacts` checks package projects only. Before claiming completion of TypeScript changes, run `pnpm run build:check` after the latest `build:artifacts`, or run `pnpm run build`; `build:check` reads the existing `build:artifacts` output and never rebuilds it.
 - **Real provider or agent behavior:** run the relevant `pnpm run test:e2e` target when credentials are available; never print secrets.
 
 Do not manually repeat a passing check merely because commit or push follows. In particular, do not run typecheck immediately before pushing solely to duplicate the pre-push hook.
@@ -84,9 +85,14 @@ After any rewritten push, fetch the live heads again and re-audit unresolved rev
 
 ### Post-sync validation
 
-`gh stack sync` fetches, cascade-rebases, and pushes as one operation, so it cannot place local validation between rewrite and publication. Before running it, require a clean worktree and record the official stack order and exact remote heads. The stack-side procedure, including conflict handling and failure repair, lives in [dsh-merging-stacked-prs](../dsh-merging-stacked-prs/SKILL.md); this skill's duty once the command returns is evidence: run the relevant checks selected above for every rewritten layer, keep every PR unmerged, and report validation as pending until they pass.
+`gh stack sync` fetches, cascade-rebases, and pushes as one operation, so it cannot place local validation between rewrite and publication. Before running it, require a clean worktree and record the official stack order and exact remote heads. After it returns:
 
-Do not claim the sync made the stack ready merely because the command succeeded.
+1. Re-query every branch head and the official GitHub stack order.
+2. Inspect the changed scope of every rewritten layer against its live PR base.
+3. Run the relevant evidence selected by this skill for each affected layer.
+4. Keep every PR unmerged and report validation as pending until all selected checks pass.
+
+If post-sync evidence fails, leave the lease-protected published heads in place, repair the failure, validate the repair, and publish the correction. Do not claim the sync made the stack ready merely because the command succeeded.
 
 ## Handle failures
 

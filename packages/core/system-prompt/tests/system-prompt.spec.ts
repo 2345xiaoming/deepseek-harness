@@ -19,13 +19,14 @@ const SECTION_ORDER_NAMES = [
   'TOOL_PWSH', 'TOOL_READ', 'TOOL_WRITE', 'TOOL_EDIT', 'TOOL_GLOB',
   'TOOL_GREP', 'TOOL_JOBS', 'TOOL_PTY', 'TOOL_WEB_SEARCH', 'TOOL_WEB_FETCH',
   'TOOL_LSP', 'TOOL_SESSION_QUERY', 'TOOL_GOAL', 'TOOL_WORKFLOW',
-  'TOOL_RALPH', 'TOOL_SUBAGENT', 'TOOLS_SDK',
+  'TOOL_RALPH', 'TOOL_SUBAGENT', 'TOOL_REPORT', 'TOOLS_SDK',
   'DELIVERABLE_FILE_REFERENCES', 'STRUCTURED_OUTPUT',
   'HARNESS_SOURCE', 'WEB_SURFACE', 'DEPLOYMENT_PERSONA_SUFFIX',
 ] as const satisfies readonly PromptSectionOrderName[]
 const CONTEXT_ORDER_NAMES = [
   'WORKING_DIRECTORY',
-  'SANDBOX_POLICY', 'APPROVAL_POLICY', 'SUBAGENT_DELEGATION',
+  'SANDBOX_POLICY', 'APPROVAL_POLICY', 'SUBAGENT_DELEGATION', 'TEAM_IDENTITY',
+  'HARNESS_SOURCE', 'WEB_SURFACE',
 ] as const satisfies readonly PromptContextOrderName[]
 function contributed(assembly: PromptAssembly): PromptAssembly['sections'] {
   return assembly.sections.filter(section => !BUILT_IN.includes(section.name))

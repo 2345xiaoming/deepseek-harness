@@ -292,6 +292,7 @@ describe('deriveGroups', () => {
     expect(blankNode.title).toBe('')
     expect(blankNode.blank).toBe(true)
     expect(groups[0]!.sessions.find(session => session.id === real.id)!.blank).toBe(false)
+    expect(groups[0]!.sessionCount).toBe(2)
     // A non-current blank stray never surfaces an Ungrouped bucket either.
     const strayGroups = deriveGroups(
       list({ ...summary('stray', 2), blank: true }),
@@ -353,6 +354,7 @@ describe('deriveGroups', () => {
     )
 
     expect(groups[0]!.sessions.map(node => node.id)).toEqual([parent.id, fork.id])
+    expect(groups[0]!.sessionCount).toBe(2)
     expect(groups[0]!.sessions[0]).toMatchObject({ running: false, runningSubagentCount: 1 })
     expect(groups[0]!.sessions[1]).toMatchObject({ running: false, runningSubagentCount: 1 })
     expect(deriveFlat(sessions, visibleSessionIds(sessions, noArchive, 'default'), noRows, noAttention)
@@ -444,9 +446,10 @@ describe('deriveGroups', () => {
       noAttention, view(['first', UNGROUPED_KEY]),
     )
     // The archived member drops from its group AND the archived stray never
-    // surfaces an Ungrouped bucket.
+    // surfaces an Ungrouped bucket; counts follow the visible rows.
     expect(groups.map(group => group.key)).toEqual(['first'])
     expect(groups[0]!.sessions.map(node => node.id)).toEqual([kept.id])
+    expect(groups[0]!.sessionCount).toBe(1)
   })
 
   it('leads expanded groups with pinned rows in the supplied order', () => {
@@ -498,7 +501,7 @@ describe('deriveGroups', () => {
       rowState({ archived: ['stored'], archivedFilter }),
       noAttention, view(['empty']),
     )
-    expect(groups.map(group => [group.key, group.sessions.length])).toEqual([
+    expect(groups.map(group => [group.key, group.sessionCount])).toEqual([
       ['empty', archivedFilter === 'show' ? 1 : 0],
     ])
   })

@@ -74,6 +74,8 @@ export interface GroupNode {
   /** Workspace creation time (epoch ms); absent only for the ungrouped bucket. */
   createdAt: number | undefined
   label: string
+  /** Total visible sessions in the group. */
+  sessionCount: number
   expanded: boolean
   /** The group contains the selected session (active folder tint; supplied here so the renderer never scans). */
   containsCurrent: boolean
@@ -454,6 +456,7 @@ export function deriveGroups(
       cwd: g.cwd,
       createdAt: g.createdAt,
       label: g.label,
+      sessionCount: g.sessions.length,
       expanded,
       containsCurrent: g.key === currentGroup,
       sessions: expanded
