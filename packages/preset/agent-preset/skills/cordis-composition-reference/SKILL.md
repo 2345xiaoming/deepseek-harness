@@ -5,7 +5,7 @@ description: Use when writing or reading a Cordis bundle patch or agent preset f
 
 # Cordis composition reference
 
-Reference material for bundle patches and preset plugin lists. Procedures live in `cordis-plugin-development` and `editing-cordis-compositions`.
+Reference material for bundle patches and preset plugin lists. Procedures live in `cordis-plugin-development` and `editing-cordis-compositions`; [references/bundle-install.md](references/bundle-install.md) states the bundle layout, the install call, and the profile writes they forbid.
 
 ## Loader patch dialect
 

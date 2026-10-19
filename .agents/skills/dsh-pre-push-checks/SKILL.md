@@ -84,14 +84,9 @@ After any rewritten push, fetch the live heads again and re-audit unresolved rev
 
 ### Post-sync validation
 
-`gh stack sync` fetches, cascade-rebases, and pushes as one operation, so it cannot place local validation between rewrite and publication. Before running it, require a clean worktree and record the official stack order and exact remote heads. After it returns:
+`gh stack sync` fetches, cascade-rebases, and pushes as one operation, so it cannot place local validation between rewrite and publication. Before running it, require a clean worktree and record the official stack order and exact remote heads. The stack-side procedure, including conflict handling and failure repair, lives in [dsh-merging-stacked-prs](../dsh-merging-stacked-prs/SKILL.md); this skill's duty once the command returns is evidence: run the relevant checks selected above for every rewritten layer, keep every PR unmerged, and report validation as pending until they pass.
 
-1. Re-query every branch head and the official GitHub stack order.
-2. Inspect the changed scope of every rewritten layer against its live PR base.
-3. Run the relevant evidence selected by this skill for each affected layer.
-4. Keep every PR unmerged and report validation as pending until all selected checks pass.
-
-If post-sync evidence fails, leave the lease-protected published heads in place, repair the failure, validate the repair, and publish the correction. Do not claim the sync made the stack ready merely because the command succeeded.
+Do not claim the sync made the stack ready merely because the command succeeded.
 
 ## Handle failures
 

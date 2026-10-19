@@ -479,6 +479,16 @@
 
     - id: mcp-resources
       name: '@deepseek-ai/dsh-mcp-resources'
+    # Browser automation for agents (browser_snapshot/goto/click/js/... + browser_run
+    # escape hatch). Chrome boots lazily on first real browser call, so mounting this
+    # row costs no process time until a browser tool actually runs — but registering
+    # the seven tools spends ~12% of the tool-schema budget and their prompt sections
+    # in every profile. A surface whose agents drive a browser enables them in its
+    # overlay; headless, ACP, and SDK profiles leave the registry untouched.
+    - id: ego-browser
+      name: '@deepseek-ai/dsh-ego-browser'
+      config:
+        enabled: false
 
     # ── rows every mode mounts, whose values each overlay may state ──────────────
 

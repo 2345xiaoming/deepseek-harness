@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-10-15-retire-launcher-session-query-index-slot.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/simplification/2026-10-15-retire-launcher-session-query-index-slot.md
+/agent-note-retire-the-launcher-session-query-index-slot:
+  en: b6fa604f2bf8fef0
+  zh: 4b81da6e37c82247
+/agent-note-retire-the-launcher-session-query-index-slot/problem:
+  en: 2255137fe47da304
+  zh: 36154d52dffba8b6
+/agent-note-retire-the-launcher-session-query-index-slot/decision:
+  en: c0229e6cbd18ce3a
+  zh: dfe663f8f84763e6
+/agent-note-retire-the-launcher-session-query-index-slot/alternatives-considered:
+  en: 19c9b23602cfeebb
+  zh: b33d24529d25ee8a
+/agent-note-retire-the-launcher-session-query-index-slot/verification:
+  en: f58550b330ca1818
+  zh: 2250a3c9386f0df3
+/agent-note-retire-the-launcher-session-query-index-slot/consequences:
+  en: 4dbd6ce5d9fbf8d0
+  zh: eedb19e47a08e0e5

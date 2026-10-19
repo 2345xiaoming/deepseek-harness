@@ -1,11 +1,13 @@
 ---
 name: dsh-code-review
-description: Use when reviewing a pull request in the deepseek-harness repo — orients the reviewer to this codebase's standards (AGENTS.md conventions, defensive patterns, ADRs, quality gates) and the review-specific checks that code alone can't show
+description: Use when reviewing a deepseek-harness pull request, branch, stack layer, or working diff — including "review since <ref>" and pre-push review requests — orienting the reviewer to this repo's standards (AGENTS.md conventions, defensive patterns, ADRs, quality gates) and the review-specific checks that code alone can't show; this skill owns review in this repository, and the generic code-review skill's two-axis pass adds a Spec axis rather than replacing it
 ---
 
 # Reviewing a DeepSeek-Harness PR
 
 **This skill is guidance, not a complete checklist.** Verify and fetch the PR's live base and exact head, then run `pnpm --silent run change-scope --base <verified-base-ref> --head <verified-head-ref>` before reading the diff and enough surrounding code to understand the design. The report identifies paths and dirty layers but does not replace semantic review. Re-establish the base and rerun it after a retarget or merge. Prioritize correctness, lifecycle, security, and broken required behavior over style; a short review with one substantiated blocker is better than a list of nits.
+
+Reviewing a deepseek-harness change uses this skill. Where the generic `code-review` skill is available — a repository-agnostic Standards/Spec pass over the same range, run in parallel sub-agents — use its Spec axis when the change has an originating issue, and report the axes side by side; its generic Standards pass does not replace the blocking requirements and manual checks below.
 
 ## Sources of truth
 

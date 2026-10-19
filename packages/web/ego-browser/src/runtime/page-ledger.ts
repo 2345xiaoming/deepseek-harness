@@ -1,0 +1,747 @@
+// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
+import { randomUUID } from 'node:crypto'
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import {
+  validatePageRefState,
+  type PageRefState,
+} from './page-ref-registry.ts'
+
+/** Who opened a Page: this Agent, or a tab the runtime could not attribute. */
+export type PageOrigin = 'agent' | 'unknown'
+
+/** One Page recorded in a task space's ledger. */
+export type PageLedgerEntry = {
+  targetId: string
+  openedBy: PageOrigin
+  /** Persisted public ref state, when the Page has one. */
+  refs?: PageRefState
+}
+
+/** A ledger entry under the label the Page API publishes, such as `p1`. */
+export type ManagedPage = PageLedgerEntry & {
+  label: string
+}
+
+/** Durable Page-model state for one task space, written as one JSON document per space. */
+export type PageLedger = {
+  /** Browser instance that owns this ledger; ledgers of other instances are ignored. */
+  browserInstanceId?: string
+  spaceId: number
+  /** Sequence the next automatic `pN` label starts from. */
+  nextLabel: number
+  /** Every label handed out so far; labels are never reused. */
+  usedLabels: string[]
+  /** Labels whose Pages were released to the user and so are permanently gone. */
+  releasedLabels: string[]
+  /** Whether the first reconciliation has observed the user's control boundary. */
+  initialized: boolean
+  /** Whether the next reconciliation must preserve tabs as user-owned. */
+  userControlPending: boolean
+  /** Live tabs the ledger preserves but does not manage, keyed by target id. */
+  unmanagedTargets: Record<string, PageOrigin>
+  /** Managed Pages keyed by published label. */
+  pages: Record<string, PageLedgerEntry>
+}
+
+type PageLedgerStoreOptions = {
+  rootDir?: string
+  browserInstanceId?: string | (() => string | Promise<string>)
+  staleAfterMs?: number
+  now?: () => number
+}
+
+const DEFAULT_STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * Stable across Agent rounds and Node-service restarts in one Ego Lite run.
+ * @param parentPid - process id of the host that owns the browser runtime.
+ * @returns the instance id every runtime started by that host shares.
+ */
+export function runtimeInstanceId(parentPid = process.ppid): string {
+  return `browser-host:${parentPid}`
+}
+
+type AddPageOptions = {
+  as?: string
+  openedBy?: PageOrigin
+}
+
+type ReconcileOptions = {
+  autoAdoptNew?: boolean
+  afterUserControl?: boolean
+}
+
+/**
+ * Resolve a published label inside one ledger, reporting why it is unusable.
+ * @param ledger - ledger the label is resolved against.
+ * @param label - published label such as `p1`.
+ * @returns the stored entry.
+ * @throws when the label was never used, was released, or was closed already.
+ */
+function resolvePageEntry(ledger: PageLedger, label: string): PageLedgerEntry {
+  const entry = ledger.pages[label]
+  if (entry) return entry
+  if (ledger.releasedLabels.includes(label)) {
+    throw new Error(`page ${label} was released`)
+  }
+  if (ledger.usedLabels.includes(label)) {
+    throw new Error(`page ${label} was closed`)
+  }
+  throw new Error(`page label not found: ${label}`)
+}
+
+/**
+ * Stores durable page labels in one JSON document per task space. Each update
+ * replaces the complete document with an atomic rename so readers never see a
+ * partially written ledger.
+ */
+export class PageLedgerStore {
+  /** Directory holding one `space-<id>.json` ledger per task space. */
+  readonly rootDir: string
+  readonly #writeToken = randomUUID()
+  readonly #browserInstanceId?: string | (() => string | Promise<string>)
+  readonly #staleAfterMs: number
+  readonly #now: () => number
+  #temporarySequence = 0
+  #resolvedBrowserInstanceId?: Promise<string | undefined>
+  #cleanup?: Promise<void>
+
+  constructor(options: PageLedgerStoreOptions = {}) {
+    this.rootDir =
+      options.rootDir ||
+      process.env.EGO_BROWSER_STATE_DIR ||
+      join(homedir(), '.ego-browser', 'state')
+    this.#browserInstanceId = options.browserInstanceId
+    this.#staleAfterMs =
+      options.staleAfterMs === undefined
+        ? DEFAULT_STALE_AFTER_MS
+        : options.staleAfterMs
+    this.#now = options.now || Date.now
+    if (!Number.isFinite(this.#staleAfterMs) || this.#staleAfterMs < 0) {
+      throw new TypeError('staleAfterMs must be a non-negative number')
+    }
+  }
+
+  /**
+   * Read one task space's ledger as a copy the caller may mutate.
+   * A missing ledger, or one written by another browser instance, reads as
+   * empty; a stored ledger that fails validation throws.
+   * @param spaceId - task space whose ledger is read.
+   * @returns the ledger copy, or an empty ledger when none applies.
+   */
+  async read(spaceId: number): Promise<PageLedger> {
+    assertSpaceId(spaceId)
+    const ledger = await this.#readCurrent(spaceId)
+    return cloneLedger(ledger)
+  }
+
+  /**
+   * Replace any stale state for a newly created space with its Agent-owned p1.
+   * @param spaceId - task space that was just created.
+   * @param targetId - native page target id of the space's first tab.
+   * @returns the `p1` entry written to the ledger.
+   */
+  async initializeCreatedSpace(
+    spaceId: number,
+    targetId: string,
+  ): Promise<ManagedPage> {
+    assertSpaceId(spaceId)
+    assertTargetId(targetId)
+    const browserInstanceId = await this.#currentBrowserInstanceId()
+    await this.#cleanupExpiredLedgers(browserInstanceId)
+    const ledger = emptyLedger(spaceId, browserInstanceId)
+    const label = nextAutomaticLabel(ledger, new Set())
+    const entry: PageLedgerEntry = { targetId, openedBy: 'agent' }
+    ledger.initialized = true
+    ledger.usedLabels.push(label)
+    ledger.pages[label] = entry
+    await this.#writeAtomic(spaceId, ledger)
+    return { label, ...entry }
+  }
+
+  /**
+   * Remove all Page-model state after its task space is finished or closed.
+   * @param spaceId - task space whose ledger document is deleted.
+   */
+  async discard(spaceId: number): Promise<void> {
+    assertSpaceId(spaceId)
+    await rm(this.#path(spaceId), { force: true })
+  }
+
+  /**
+   * Resolve one published label to its Page.
+   * @param spaceId - task space that owns the label.
+   * @param label - published label such as `p1`.
+   * @returns the managed page.
+   * @throws when the label is unknown, released, or closed.
+   */
+  async getPage(spaceId: number, label: string): Promise<ManagedPage> {
+    assertLabel(label)
+    const ledger = await this.read(spaceId)
+    return { label, ...resolvePageEntry(ledger, label) }
+  }
+
+  /**
+   * Add a Page to the ledger under an explicit or automatic label.
+   * @param spaceId - task space that owns the new Page.
+   * @param targetId - native page target id.
+   * @param options - explicit label (`as`) and opener (`openedBy`).
+   * @returns the added page.
+   * @throws when the target is already managed or the label was used before.
+   */
+  async addPage(
+    spaceId: number,
+    targetId: string,
+    options: AddPageOptions = {},
+  ): Promise<ManagedPage> {
+    assertTargetId(targetId)
+    if (options.as !== undefined) assertLabel(options.as)
+    let added: ManagedPage
+    await this.#update(spaceId, (ledger) => {
+      const existing = Object.entries(ledger.pages).find(
+        ([, page]) => page.targetId === targetId,
+      )
+      if (existing) {
+        throw new Error(`target ${targetId} is already page ${existing[0]}`)
+      }
+
+      const used = new Set(ledger.usedLabels)
+      const label = options.as || nextAutomaticLabel(ledger, used)
+      if (used.has(label)) {
+        throw new Error(`page label already used: ${label}`)
+      }
+      const entry: PageLedgerEntry = {
+        targetId,
+        openedBy: options.openedBy || 'agent',
+      }
+      ledger.initialized = true
+      Reflect.deleteProperty(ledger.unmanagedTargets, targetId)
+      ledger.usedLabels.push(label)
+      ledger.pages[label] = entry
+      added = { label, ...entry }
+    })
+    return added!
+  }
+
+  /**
+   * Persist one Page's public ref state.
+   * @param spaceId - task space that owns the Page.
+   * @param label - published label such as `p1`.
+   * @param refs - ref state to store; it is validated before it is written.
+   * @throws when the label is unknown or the state fails validation.
+   */
+  async setPageRefs(
+    spaceId: number,
+    label: string,
+    refs: PageRefState,
+  ): Promise<void> {
+    assertLabel(label)
+    await this.#update(spaceId, (ledger) => {
+      const page = ledger.pages[label]
+      if (!page) throw new Error(`page label not found: ${label}`)
+      page.refs = validatePageRefState(refs)
+    })
+  }
+
+  /**
+   * Remove one Page from a task space and run `after` on the same ledger
+   * revision: a close and a release differ only in the bookkeeping they leave
+   * behind, never in how the label is resolved or dropped.
+   * @param spaceId - task space that owns the Page.
+   * @param label - published label such as `p1`.
+   * @param after - extra ledger mutation applied after the entry is dropped.
+   * @returns the removed page entry.
+   * @throws when the label was never used, was released, or was closed already.
+   */
+  async #removePage(
+    spaceId: number,
+    label: string,
+    after?: (ledger: PageLedger, entry: PageLedgerEntry) => void,
+  ): Promise<ManagedPage> {
+    assertLabel(label)
+    let removed: ManagedPage
+    await this.#update(spaceId, (ledger) => {
+      const entry = resolvePageEntry(ledger, label)
+      removed = { label, ...entry }
+      Reflect.deleteProperty(ledger.pages, label)
+      after?.(ledger, entry)
+    })
+    return removed!
+  }
+
+  /**
+   * Remove a Page from the ledger, recording that its label was closed.
+   * @param spaceId - task space that owns the Page.
+   * @param label - published label such as `p1`.
+   * @returns the removed page entry.
+   * @throws when the label was never used, was released, or was closed already.
+   */
+  async closePage(spaceId: number, label: string): Promise<ManagedPage> {
+    return this.#removePage(spaceId, label)
+  }
+
+  /**
+   * Remove a Page from the ledger and keep its target as a user-owned tab.
+   * @param spaceId - task space that owns the Page.
+   * @param label - published label such as `p1`.
+   * @returns the removed page entry.
+   * @throws when the label was never used, was released, or was closed already.
+   */
+  async releasePage(spaceId: number, label: string): Promise<ManagedPage> {
+    return this.#removePage(spaceId, label, (ledger, entry) => {
+      ledger.releasedLabels.push(label)
+      ledger.unmanagedTargets[entry.targetId] = entry.openedBy
+    })
+  }
+
+  /**
+   * Record a live tab the ledger preserves but does not manage.
+   * @param spaceId - task space the tab belongs to.
+   * @param targetId - native page target id.
+   * @param openedBy - who opened the tab; only `agent` and `unknown` are accepted.
+   * @throws when the target is already a managed Page or the origin is invalid.
+   */
+  async keepUnmanaged(
+    spaceId: number,
+    targetId: string,
+    openedBy: PageOrigin = 'unknown',
+  ): Promise<void> {
+    assertTargetId(targetId)
+    if (!['agent', 'unknown'].includes(openedBy)) {
+      throw new TypeError(`invalid unmanaged page origin: ${openedBy}`)
+    }
+    await this.#update(spaceId, (ledger) => {
+      const existing = Object.entries(ledger.pages).find(
+        ([, page]) => page.targetId === targetId,
+      )
+      if (existing) {
+        throw new Error(`target ${targetId} is already page ${existing[0]}`)
+      }
+      ledger.initialized = true
+      ledger.unmanagedTargets[targetId] = openedBy
+    })
+  }
+
+  /**
+   * Mark the next reconciliation as crossing a user-control boundary.
+   * @param spaceId - task space that owns the boundary.
+   */
+  async beginUserControl(spaceId: number): Promise<void> {
+    await this.#update(spaceId, (ledger) => {
+      ledger.userControlPending = true
+    })
+  }
+
+  /**
+   * Roll back a boundary marker when the native handoff itself fails.
+   * @param spaceId - task space whose marker is cleared.
+   */
+  async cancelUserControl(spaceId: number): Promise<void> {
+    await this.#update(spaceId, (ledger) => {
+      ledger.userControlPending = false
+    })
+  }
+
+  /**
+   * Reconcile the ledger with the tabs that are currently open. Entries for
+   * closed tabs are dropped; tabs the ledger has not seen stay unmanaged while
+   * a user-control boundary is pending, and are adopted as Agent Pages only
+   * when `autoAdoptNew` is set.
+   * @param spaceId - task space to reconcile.
+   * @param liveTargetIds - native page target ids currently open.
+   * @param options - adoption policy and an explicit boundary override.
+   * @returns the reconciled ledger, unchanged when nothing had to be applied.
+   */
+  async reconcile(
+    spaceId: number,
+    liveTargetIds: Iterable<string>,
+    options: ReconcileOptions = {},
+  ): Promise<PageLedger> {
+    const live = new Set(liveTargetIds)
+    const current = await this.read(spaceId)
+    const hasMissingPage = Object.values(current.pages).some(
+      page => !live.has(page.targetId),
+    )
+    const hasMissingUnmanaged = Object.keys(current.unmanagedTargets).some(
+      targetId => !live.has(targetId),
+    )
+    const knownTargets = new Set([
+      ...Object.values(current.pages).map(page => page.targetId),
+      ...Object.keys(current.unmanagedTargets),
+    ])
+    const newTargets = [...live].filter(
+      targetId => !knownTargets.has(targetId),
+    )
+    const needsInitialization = !current.initialized
+    const protectsUserTabs =
+      options.afterUserControl || current.userControlPending
+    const shouldAdopt =
+      current.initialized &&
+      options.autoAdoptNew &&
+      !protectsUserTabs &&
+      newTargets.length > 0
+    if (
+      !hasMissingPage &&
+      !hasMissingUnmanaged &&
+      !needsInitialization &&
+      !protectsUserTabs &&
+      !shouldAdopt
+    ) {
+      return current
+    }
+
+    return this.#update(spaceId, (ledger) => {
+      for (const [label, page] of Object.entries(ledger.pages)) {
+        if (!live.has(page.targetId)) Reflect.deleteProperty(ledger.pages, label)
+      }
+      for (const targetId of Object.keys(ledger.unmanagedTargets)) {
+        if (!live.has(targetId)) Reflect.deleteProperty(ledger.unmanagedTargets, targetId)
+      }
+
+      const managedTargets = new Set(
+        Object.values(ledger.pages).map(page => page.targetId),
+      )
+      const untracked = [...live].filter(
+        targetId =>
+          !managedTargets.has(targetId) &&
+          !Object.hasOwn(ledger.unmanagedTargets, targetId),
+      )
+      if (!ledger.initialized) {
+        // The first observable tab set is the control boundary. It may contain
+        // user pages from before claim/takeover, so preserve it rather than
+        // guessing that those tabs were opened by the current agent.
+        for (const targetId of untracked) {
+          ledger.unmanagedTargets[targetId] = 'unknown'
+        }
+        ledger.initialized = true
+        ledger.userControlPending = false
+        return
+      }
+      if (protectsUserTabs) {
+        for (const targetId of untracked) {
+          ledger.unmanagedTargets[targetId] = 'unknown'
+        }
+        ledger.userControlPending = false
+        return
+      }
+      if (!options.autoAdoptNew) return
+
+      const used = new Set(ledger.usedLabels)
+      for (const targetId of untracked) {
+        const label = nextAutomaticLabel(ledger, used)
+        used.add(label)
+        ledger.usedLabels.push(label)
+        ledger.pages[label] = {
+          targetId,
+          openedBy: 'agent',
+        }
+      }
+    })
+  }
+
+  async #update(
+    spaceId: number,
+    mutate: (ledger: PageLedger) => void,
+  ): Promise<PageLedger> {
+    assertSpaceId(spaceId)
+    const next = await this.#readCurrent(spaceId)
+    mutate(next)
+    await this.#writeAtomic(spaceId, next)
+    return cloneLedger(next)
+  }
+
+  async #readCurrent(spaceId: number): Promise<PageLedger> {
+    const browserInstanceId = await this.#currentBrowserInstanceId()
+    await this.#cleanupExpiredLedgers(browserInstanceId)
+    const path = this.#path(spaceId)
+    let raw: string
+    try {
+      raw = await readFile(path, 'utf8')
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        return emptyLedger(spaceId, browserInstanceId)
+      }
+      throw error
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch (error) {
+      throw new Error(`invalid page ledger ${path}: ${error.message}`)
+    }
+    const storedBrowserInstanceId = ledgerBrowserInstanceId(parsed)
+    if (
+      browserInstanceId !== undefined &&
+      storedBrowserInstanceId !== undefined &&
+      storedBrowserInstanceId !== browserInstanceId
+    ) {
+      return emptyLedger(spaceId, browserInstanceId)
+    }
+    const ledger = validateLedger(parsed, spaceId, path)
+    if (
+      browserInstanceId !== undefined &&
+      storedBrowserInstanceId === undefined
+    ) {
+      // Preserve ledgers created before instance ids existed. This one-time
+      // backfill avoids discarding live Page labels during an SDK upgrade.
+      ledger.browserInstanceId = browserInstanceId
+      await this.#writeAtomic(spaceId, ledger)
+    }
+    return ledger
+  }
+
+  async #currentBrowserInstanceId(): Promise<string | undefined> {
+    this.#resolvedBrowserInstanceId ||= Promise.resolve(
+      typeof this.#browserInstanceId === 'function'
+        ? this.#browserInstanceId()
+        : this.#browserInstanceId,
+    ).then((value) => {
+      if (value === undefined) return undefined
+      if (typeof value !== 'string' || value.length === 0) {
+        throw new TypeError('browserInstanceId must be a non-empty string')
+      }
+      return value
+    })
+    return this.#resolvedBrowserInstanceId
+  }
+
+  async #cleanupExpiredLedgers(
+    browserInstanceId: string | undefined,
+  ): Promise<void> {
+    if (browserInstanceId === undefined) return
+    this.#cleanup ||= this.#removeExpiredLedgers(browserInstanceId)
+    await this.#cleanup
+  }
+
+  async #removeExpiredLedgers(browserInstanceId: string): Promise<void> {
+    let names: string[]
+    try {
+      names = await readdir(this.rootDir)
+    } catch (error) {
+      if (error?.code === 'ENOENT') return
+      throw error
+    }
+    await Promise.all(
+      names
+        .filter(name => /^space-\d+\.json$/.test(name))
+        .map(async (name) => {
+          const path = join(this.rootDir, name)
+          const metadata = await stat(path).catch(() => undefined)
+          if (
+            !metadata ||
+            this.#now() - metadata.mtimeMs < this.#staleAfterMs
+          ) {
+            return
+          }
+          let storedInstanceId: string | undefined
+          try {
+            storedInstanceId = ledgerBrowserInstanceId(
+              JSON.parse(await readFile(path, 'utf8')),
+            )
+          } catch {
+            // An expired unreadable ledger cannot belong to the active browser.
+          }
+          if (storedInstanceId !== browserInstanceId) {
+            await rm(path, { force: true })
+          }
+        }),
+    )
+  }
+
+  async #writeAtomic(spaceId: number, ledger: PageLedger): Promise<void> {
+    await mkdir(this.rootDir, { recursive: true, mode: 0o700 })
+    const path = this.#path(spaceId)
+    const temporary = `${path}.${process.pid}.${this.#writeToken}.${++this.#temporarySequence}.tmp`
+    try {
+      await writeFile(temporary, `${JSON.stringify(ledger, null, 2)}\n`, {
+        encoding: 'utf8',
+        mode: 0o600,
+      })
+      await rename(temporary, path)
+    } finally {
+      await rm(temporary, { force: true }).catch(() => {})
+    }
+  }
+
+  #path(spaceId: number): string {
+    return join(this.rootDir, `space-${spaceId}.json`)
+  }
+}
+
+function emptyLedger(spaceId: number, browserInstanceId?: string): PageLedger {
+  return {
+    ...(browserInstanceId ? { browserInstanceId } : {}),
+    spaceId,
+    nextLabel: 1,
+    usedLabels: [],
+    releasedLabels: [],
+    initialized: false,
+    userControlPending: false,
+    unmanagedTargets: {},
+    pages: {},
+  }
+}
+
+function ledgerBrowserInstanceId(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+  const browserInstanceId = (value as { browserInstanceId?: unknown })
+    .browserInstanceId
+  return typeof browserInstanceId === 'string' && browserInstanceId.length > 0
+    ? browserInstanceId
+    : undefined
+}
+
+function nextAutomaticLabel(ledger: PageLedger, used: Set<string>): string {
+  let sequence = ledger.nextLabel
+  let label = `p${sequence}`
+  while (used.has(label)) {
+    sequence += 1
+    label = `p${sequence}`
+  }
+  ledger.nextLabel = sequence + 1
+  return label
+}
+
+function validateLedger(
+  value: unknown,
+  expectedSpaceId: number,
+  path: string,
+): PageLedger {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`invalid page ledger ${path}: expected an object`)
+  }
+  const stored = value as PageLedger & { handoffBaseline?: unknown }
+  // Defaults keep ledgers written by earlier runtimes readable. They start
+  // uninitialized so the first new runtime observes a safe control baseline
+  // instead of silently adopting pre-existing user tabs.
+  const releasedLabels = stored.releasedLabels ?? []
+  const initialized = stored.initialized ?? false
+  const legacyHandoffBaseline = stored.handoffBaseline
+  const userControlPending =
+    stored.userControlPending ??
+    (legacyHandoffBaseline !== undefined && legacyHandoffBaseline !== null)
+  const unmanagedTargets = stored.unmanagedTargets ?? {}
+  if (
+    (stored.browserInstanceId !== undefined &&
+      (typeof stored.browserInstanceId !== 'string' ||
+        stored.browserInstanceId.length === 0)) ||
+    stored.spaceId !== expectedSpaceId ||
+    !Number.isInteger(stored.nextLabel) ||
+    stored.nextLabel < 1 ||
+    !Array.isArray(stored.usedLabels) ||
+    stored.usedLabels.some(label => typeof label !== 'string') ||
+    !Array.isArray(releasedLabels) ||
+    releasedLabels.some(
+      label =>
+        typeof label !== 'string' ||
+        !stored.usedLabels.includes(label) ||
+        Object.hasOwn(stored.pages || {}, label),
+    ) ||
+    typeof initialized !== 'boolean' ||
+    typeof userControlPending !== 'boolean' ||
+    (legacyHandoffBaseline !== undefined &&
+      legacyHandoffBaseline !== null &&
+      (!Array.isArray(legacyHandoffBaseline) ||
+        legacyHandoffBaseline.some(
+          targetId => typeof targetId !== 'string' || targetId.length === 0,
+        ))) ||
+    !unmanagedTargets ||
+    typeof unmanagedTargets !== 'object' ||
+    Array.isArray(unmanagedTargets) ||
+    Object.entries(unmanagedTargets).some(
+      ([targetId, openedBy]) =>
+        targetId.length === 0 ||
+        !['agent', 'user', 'unknown'].includes(openedBy),
+    ) ||
+    !stored.pages ||
+    typeof stored.pages !== 'object' ||
+    Array.isArray(stored.pages)
+  ) {
+    throw new Error(`invalid page ledger ${path}: schema mismatch`)
+  }
+  const pages: Record<string, PageLedgerEntry> = {}
+  for (const [label, page] of Object.entries(stored.pages)) {
+    if (
+      !stored.usedLabels.includes(label) ||
+      !page ||
+      typeof page.targetId !== 'string' ||
+      !['agent', 'user', 'unknown'].includes(page.openedBy)
+    ) {
+      throw new Error(`invalid page ledger ${path}: invalid page ${label}`)
+    }
+    if (Object.hasOwn(unmanagedTargets, page.targetId)) {
+      throw new Error(
+        `invalid page ledger ${path}: target ${page.targetId} is both managed and unmanaged`,
+      )
+    }
+    pages[label] = {
+      targetId: page.targetId,
+      openedBy: normalizePageOrigin(page.openedBy),
+      ...(page.refs === undefined
+        ? {}
+        : { refs: validatePageRefState(page.refs) }),
+    }
+  }
+  const normalizedUnmanagedTargets = Object.fromEntries(
+    Object.entries(unmanagedTargets).map(([targetId, openedBy]) => [
+      targetId,
+      normalizePageOrigin(openedBy),
+    ]),
+  )
+  return {
+    ...(stored.browserInstanceId
+      ? { browserInstanceId: stored.browserInstanceId }
+      : {}),
+    spaceId: stored.spaceId,
+    nextLabel: stored.nextLabel,
+    usedLabels: [...stored.usedLabels],
+    releasedLabels: [...releasedLabels],
+    initialized,
+    userControlPending,
+    unmanagedTargets: normalizedUnmanagedTargets,
+    pages,
+  }
+}
+
+function normalizePageOrigin(value: unknown): PageOrigin {
+  return value === 'agent' ? 'agent' : 'unknown'
+}
+
+function cloneLedger(ledger: PageLedger): PageLedger {
+  return structuredClone(ledger)
+}
+
+function assertSpaceId(spaceId: number): void {
+  if (!Number.isInteger(spaceId) || spaceId < 0) {
+    throw new TypeError('spaceId must be a non-negative integer')
+  }
+}
+
+function assertTargetId(targetId: string): void {
+  if (typeof targetId !== 'string' || targetId.length === 0) {
+    throw new TypeError('targetId must be a non-empty string')
+  }
+}
+
+function assertLabel(label: string): void {
+  if (
+    typeof label !== 'string' ||
+    !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(label)
+  ) {
+    throw new TypeError(
+      'page label must start with a letter and contain only letters, numbers, _ or -',
+    )
+  }
+}
