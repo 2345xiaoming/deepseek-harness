@@ -239,6 +239,7 @@ const REVIEW_OUTPUT = {
           files: { required: true, type: 'array', items: { type: 'string' } },
           status: { required: true, type: 'string', enum: ['reviewed', 'skipped'] },
           reason: { type: 'string' },
+          planError: { type: 'string' },
           findingCount: { required: true, type: 'integer' },
         },
       },
@@ -250,6 +251,7 @@ const REVIEW_OUTPUT = {
         worker: { required: true, type: 'string', enum: ['subagent', 'llm'] },
         bundles: { required: true, type: 'integer' },
         planRuns: { required: true, type: 'integer' },
+        planFailures: { required: true, type: 'integer' },
         filterRuns: { required: true, type: 'integer' },
         relocated: { required: true, type: 'integer' },
         durationMs: { required: true, type: 'integer' },
@@ -292,6 +294,7 @@ function renderResult(result: ReviewResult): string {
     + `coverage ${result.coverage.reviewed}/${result.coverage.total} (rate ${result.coverage.rate}), `
     + `${result.filteredCount} filtered`,
     `worker=${result.stats.worker} · bundles=${result.stats.bundles} · planRuns=${result.stats.planRuns} `
+    + `· planFailures=${result.stats.planFailures} `
     + `· filterRuns=${result.stats.filterRuns} · relocated=${result.stats.relocated} · ${Math.round(result.stats.durationMs / 1000)}s`,
   )
   for (const severity of SEVERITIES) {
@@ -307,6 +310,11 @@ function renderResult(result: ReviewResult): string {
   if (result.coverage.skipped.length > 0) {
     lines.push('', `Skipped (${result.coverage.skipped.length}):`)
     for (const entry of result.coverage.skipped) lines.push(`  ${entry.path} — ${entry.reason}`)
+  }
+  const planFailures = result.bundles.filter(bundle => bundle.planError !== undefined)
+  if (planFailures.length > 0) {
+    lines.push('', `Plan failures (${planFailures.length}) — reviews ran without guidance:`)
+    for (const bundle of planFailures) lines.push(`  [${bundle.id}] ${bundle.label} — ${bundle.planError}`)
   }
   const failed = result.bundles.filter(bundle => bundle.status === 'skipped')
   if (failed.length > 0) {

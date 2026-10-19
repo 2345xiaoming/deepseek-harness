@@ -103,7 +103,8 @@ ocr_review(from,to|commit|workspace)
 - `llm` 通道的路由来自会话捕获（`llm/stream` 观察）或 `llmProvider`/`llmModel` 配置（`''`/省略视为未配置）。
 - 领域词汇（Review Worker / Worker Task / Structured Document / Review Spec / Coverage 等）见 `CONTEXT.md`。
 - findings API 只记录最近一次 `ocr_review`/`ocr_scan`（`ocr_preview`/`ocr_rules` 不进面板）。
-- 运行统计（`worker`/`bundles`/`filterRuns`/耗时）以一行文本输出给模型，canonical 值同时携带完整 `stats`。
+- 运行统计（`worker`/`bundles`/`planRuns`/`planFailures`/`filterRuns`/`relocated`/耗时）以一行文本输出给模型，canonical 值同时携带完整 `stats`。
+- 预规划与定位回退都是 **fail-open 但可见**：plan 失败时 `stats.planFailures` 计数 + `bundles[].planError` 记录原因，render 输出 `Plan failures (N)` 区段；定位回退失败则位置保持未核实。
 - `maxTokens`（默认 8192）是**单次 worker 请求**的输出上限：被截断的 worker 不会产出结构化文档，其整个 bundle 记为 skipped（coverage 如实记账，不静默）。
 - glob 匹配大小写不敏感（与上游 `ToLower`+doublestar 一致）并支持 `[abc]` 字符类；`rule.json` 条目做字段校验，顶层 `include`/`exclude` 过滤已实现（`include` 绕过排除列表、`exclude` 最高优先级）。
 - `ocr_scan` 有安全上限：超过 200 个文件或 2MiB 单文件时报错/排除，二进制文件不读取（护栏不做配置项，理由见 [ADR-0003](docs/adr/0003-scan-caps-as-invariants.md)）。

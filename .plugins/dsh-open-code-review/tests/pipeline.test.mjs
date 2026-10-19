@@ -164,6 +164,8 @@ test('a failed plan is fail-open: the review still runs without guidance', async
   const result = await run(spec, worker, { plan: true })
   assert.equal(result.findings.length, 1)
   assert.equal(result.stats.planRuns, 0)
+  assert.equal(result.stats.planFailures, 1)
+  assert.ok(result.bundles[0].planError.includes('planner exploded'), 'the swallowed failure is reported')
 })
 
 test('planning stays off when disabled', async () => {

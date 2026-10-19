@@ -113,6 +113,8 @@ export interface BundleOutcome {
   files: string[]
   status: 'reviewed' | 'skipped'
   reason?: string
+  /** Present when the bundle's pre-review plan failed (the review still ran). */
+  planError?: string
   findingCount: number
 }
 
@@ -132,6 +134,8 @@ export interface ReviewResult {
     bundles: number
     /** Bundles whose pre-review plan succeeded (fail-open plans are not counted). */
     planRuns: number
+    /** Bundles whose pre-review plan failed; the review ran without guidance. */
+    planFailures: number
     filterRuns: number
     /** Comments the LLM relocation fallback re-anchored after the deterministic pass missed. */
     relocated: number

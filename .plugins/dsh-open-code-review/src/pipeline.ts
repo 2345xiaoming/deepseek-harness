@@ -69,6 +69,7 @@ interface RunState {
   bundleOutcomes: BundleOutcome[]
   filteredCount: number
   planRuns: number
+  planFailures: number
   filterRuns: number
   relocated: number
   reviewedPaths: Set<string>
@@ -85,7 +86,7 @@ interface RunState {
 export async function runReview(input: RunReviewInput): Promise<ReviewResult> {
   const started = Date.now()
   const { spec, worker, signal } = input
-  const state: RunState = { findings: [], skipped: [], bundleOutcomes: [], filteredCount: 0, planRuns: 0, filterRuns: 0, relocated: 0, reviewedPaths: new Set() }
+  const state: RunState = { findings: [], skipped: [], bundleOutcomes: [], filteredCount: 0, planRuns: 0, planFailures: 0, filterRuns: 0, relocated: 0, reviewedPaths: new Set() }
   const ruleByFile = new Map<string, RuleGroup>()
   for (const group of spec.ruleGroups) for (const file of group.files) ruleByFile.set(file, group)
 
@@ -103,9 +104,10 @@ export async function runReview(input: RunReviewInput): Promise<ReviewResult> {
     const ruleText = checklistFor(ruleByFile, bundle.files)
     const otherChanged = otherFiles.filter(line => !bundle.files.some(file => line.endsWith(` ${file}`)))
     try {
-      const planGuidance = input.plan
+      const plan = input.plan
         ? await planBundle(worker, otherChanged, diffs, ruleText, input, state, bundle.id, signal)
         : undefined
+      const planGuidance = plan?.guidance
       const raw = await worker.run({
         label: `ocr review bundle ${bundle.id}`,
         system: REVIEW_SYSTEM_PROMPT,
@@ -132,7 +134,14 @@ export async function runReview(input: RunReviewInput): Promise<ReviewResult> {
       })
       // Reviewed: the worker covering this file completed.
       for (const file of bundle.files) state.reviewedPaths.add(file)
-      state.bundleOutcomes.push({ id: bundle.id, label: bundle.label, files: bundle.files, status: 'reviewed', findingCount })
+      state.bundleOutcomes.push({
+        id: bundle.id,
+        label: bundle.label,
+        files: bundle.files,
+        status: 'reviewed',
+        ...(plan?.error !== undefined ? { planError: plan.error } : {}),
+        findingCount,
+      })
     } catch (error) {
       if (signal.aborted) throw error
       const reason = `worker failed: ${String(error).slice(0, 300)}`
@@ -160,6 +169,7 @@ export async function runReview(input: RunReviewInput): Promise<ReviewResult> {
       worker: worker.kind,
       bundles: spec.bundles.length,
       planRuns: state.planRuns,
+      planFailures: state.planFailures,
       filterRuns: state.filterRuns,
       relocated: state.relocated,
       durationMs: Date.now() - started,
@@ -170,7 +180,7 @@ export async function runReview(input: RunReviewInput): Promise<ReviewResult> {
 /**
  * Run the pre-review planner for one bundle and render its guidance. Fail-open:
  * a failed plan leaves the review running without guidance.
- * @returns The guidance block, or undefined when planning failed or produced nothing.
+ * @returns The guidance block, the failure reason, or neither when the plan was empty.
  */
 async function planBundle(
   worker: ReviewWorker,
@@ -181,7 +191,7 @@ async function planBundle(
   state: RunState,
   bundleId: number,
   signal: AbortSignal,
-): Promise<string | undefined> {
+): Promise<{ guidance?: string; error?: string }> {
   try {
     const raw = await worker.run({
       label: `ocr review plan ${bundleId}`,
@@ -197,10 +207,12 @@ async function planBundle(
     }, signal)
     state.planRuns += 1
     const guidance = renderPlanGuidance(normalizePlan(raw))
-    return guidance === '' ? undefined : guidance
+    return guidance === '' ? {} : { guidance }
   } catch (error) {
     if (signal.aborted) throw error
-    return undefined
+    // Fail-open, visible: the review runs without guidance and the reason is reported.
+    state.planFailures += 1
+    return { error: `plan failed: ${String(error).slice(0, 300)}` }
   }
 }
 
