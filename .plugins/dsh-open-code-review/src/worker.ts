@@ -13,6 +13,7 @@
  */
 
 import type LlmService from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { delegationDepthOf } from '@deepseek-ai/dsh-subagent'
 import type { SubagentRuntime } from '@deepseek-ai/dsh-subagent'
@@ -74,12 +75,27 @@ export interface WorkerDeps {
   parent?: Agent
   /** Registered subagent provider name. */
   subagentProvider: string
+  /**
+   * Agent Preset id mounting a read-only tool surface for isolated workers.
+   * Required by the `subagent` channel: rc.2 scopes child tools through presets,
+   * so a worker that cannot be restricted fails loud instead of running with
+   * the parent's write tools.
+   */
+  subagentPreset?: string
   /** Output-token ceiling for one worker call. */
   maxTokens: number
+  /**
+   * Reasoning effort for the `llm` channel. Omitted leaves the field off the
+   * request so the route applies its own default; a route that rejects the
+   * requested effort fails the call before I/O.
+   */
+  reasoningEffort?: ReasoningEffortId
+  /**
+   * Session identity stamped onto the `llm` request. Routes that require a
+   * session-scoped transport header refuse a call without it.
+   */
+  sessionId?: GenerateOptions['sessionId']
 }
-
-/** Read-only tools a review worker keeps: context gathering without mutation. */
-const READONLY_TOOLS = ['read', 'read_image', 'grep', 'glob'] as const
 
 /**
  * Build a review worker for one run.
@@ -93,9 +109,13 @@ export function createWorker(deps: WorkerDeps): ReviewWorker {
     if (subagents === undefined || parent === undefined) {
       throw new Error('subagent workers requested but no subagent runtime or parent agent is available')
     }
+    const preset = deps.subagentPreset
+    if (preset === undefined) {
+      throw new Error('subagent workers need a read-only Agent Preset: configure subagentPreset or select the llm channel')
+    }
     return {
       kind: 'subagent',
-      run: (task, signal) => runSubagentWorker(subagents, parent, deps, task, signal),
+      run: (task, signal) => runSubagentWorker(subagents, parent, deps, preset, task, signal),
     }
   }
   return {
@@ -105,13 +125,15 @@ export function createWorker(deps: WorkerDeps): ReviewWorker {
 }
 
 /**
- * The subagent adapter: one isolated child per task — read-only toolset
- * (`toolFilter`), no delegation of its own (the cap equals the child's own
- * depth), and the configured output-token ceiling. Start-time capability
- * rejection propagates: a review never silently loses its restrictions.
+ * The subagent adapter: one isolated child per task — the read-only tool surface
+ * comes from `preset` (rc.2 scopes child tools through Agent Presets), no
+ * delegation of its own (the cap equals the child's own depth), and the
+ * configured output-token ceiling. Start-time capability rejection propagates: a
+ * review never silently loses its restrictions.
  * @param subagents - The subagent runtime.
  * @param parent - The spawning agent.
  * @param deps - Worker policy (provider name, token ceiling).
+ * @param preset - Agent Preset id that mounts the worker's read-only tools.
  * @param task - The assignment.
  * @param signal - Caller cancellation.
  * @returns The structured document (schema-shaped, unvalidated beyond parse).
@@ -120,6 +142,7 @@ async function runSubagentWorker(
   subagents: SubagentRuntime,
   parent: Agent,
   deps: WorkerDeps,
+  preset: string,
   task: WorkerTask,
   signal: AbortSignal,
 ): Promise<unknown> {
@@ -132,7 +155,7 @@ async function runSubagentWorker(
       outputSchema: task.schema,
       agentOptions: { maxTokens: deps.maxTokens },
       maxDepth: delegationDepthOf(parent) + 1,
-      toolFilter: { allow: [...READONLY_TOOLS] },
+      agentPreset: preset,
     },
     signal,
     delivery: 'caller',
@@ -160,29 +183,42 @@ async function runSubagentWorker(
  * @param task - The assignment.
  * @param signal - Caller cancellation.
  * @returns The parsed structured document.
- * @throws When no model route is available or the output carries no JSON document.
+ * @throws When no model route is available, the model call reports a failure on its
+ *   stream, or the output carries no JSON document.
  */
 async function runLlmWorker(deps: WorkerDeps, task: WorkerTask, signal: AbortSignal): Promise<unknown> {
   const route = deps.route
   if (route === undefined) throw new Error('no LLM route captured yet; run a model request first or configure llmProvider/llmModel')
   let text = ''
+  let finishKind: string | undefined
   const stream = deps.llm.stream({
     provider: route.provider,
     model: route.model,
-    system: task.system,
+    system: `${task.system}\n\n${NO_TOOLS_CHANNEL_NOTE}`,
     messages: [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: task.user }] })],
-    reasoningEffort: ReasoningEffortId('off'),
+    ...(deps.reasoningEffort === undefined ? {} : { reasoningEffort: deps.reasoningEffort }),
+    ...(deps.sessionId === undefined ? {} : { sessionId: deps.sessionId }),
     maxTokens: deps.maxTokens,
     signal,
   })
   for await (const chunk of stream) {
-    if (chunk.type === 'text-delta') text += chunk.text
+    if (chunk.type === 'text-delta') {
+      text += chunk.text
+      continue
+    }
+    if (chunk.type !== 'finish') continue
+    finishKind = chunk.reason.kind
+    if (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted') {
+      const { code, message, status } = chunk.reason.failure
+      const suffix = status === undefined ? '' : ` status=${String(status)}`
+      throw new Error(`llm worker model call failed on ${route.provider}/${route.model} (${code}${suffix}): ${message}`)
+    }
   }
-  return parseJsonDocument(text)
+  return parseJsonDocument(text, finishKind)
 }
 
 /** Parse a JSON document out of model text: bare object first, then a fenced block, then the first balanced brace run. */
-function parseJsonDocument(text: string): unknown {
+function parseJsonDocument(text: string, finishKind?: string): unknown {
   const trimmed = text.trim()
   try {
     return JSON.parse(trimmed)
@@ -198,7 +234,7 @@ function parseJsonDocument(text: string): unknown {
   if (start !== -1 && end > start) {
     return JSON.parse(trimmed.slice(start, end + 1))
   }
-  throw new Error(`no JSON document in model output: ${trimmed.slice(0, 200)}`)
+  throw new Error(`no JSON document in model output (finish=${finishKind ?? 'none'}): ${trimmed.slice(0, 200)}`)
 }
 
 /* ─────────────────────────── worker-output contract ─────────────────────────── */
@@ -364,6 +400,13 @@ export function parseFilterVerdict(raw: unknown, batchSize: number): FilterVerdi
 }
 
 /* ────────────────────────────── worker prose ────────────────────────────── */
+
+/**
+ * Channel note appended by the `llm` adapter. The request carries no tools, so a
+ * tool-call-shaped reply is unparseable text; the packed context is complete.
+ */
+export const NO_TOOLS_CHANNEL_NOTE = `## Channel
+This call carries no tools; the packed context above is complete. Do not emit tool calls, tool-call markup, or DSML tags. Reply with exactly one JSON document and nothing else.`
 
 /** System prompt for one bundle review worker. */
 export const REVIEW_SYSTEM_PROMPT = `## Role

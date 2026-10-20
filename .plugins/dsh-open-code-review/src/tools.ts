@@ -14,6 +14,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ObjectValueSchemaSpec } from '@deepseek-ai/dsh-tools'
 import type { ReviewResult, ReviewSpec, ReviewMode, ReviewRefs } from './types.ts'
 import { runReview } from './pipeline.ts'
+import type { GenerateOptions, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { createWorker } from './worker.ts'
 import type { LlmRoute, ReviewWorker, WorkerKind } from './worker.ts'
 import { assembleDiffRun, assembleRules, assembleScanRun, planDiffSpec } from './spec.ts'
@@ -27,8 +28,12 @@ export interface ToolHostConfig {
   worker: 'auto' | 'subagent' | 'llm'
   /** Registered subagent provider for isolated bundle workers. */
   subagentProvider: string
+  /** Agent Preset id mounting the worker's read-only tools; required by the subagent channel. */
+  subagentPreset?: string
   /** Configured LLM route override for `llm` workers. */
   llmRoute?: LlmRoute
+  /** Reasoning effort for `llm` workers; omitted leaves the field off so the route applies its default. */
+  llmReasoningEffort?: ReasoningEffortId
   /** Token ceiling for one worker call. */
   maxTokens: number
   /** Cooperative timeout budget for one tool call, in milliseconds. */
@@ -53,6 +58,8 @@ export interface ToolHost {
   llm: LlmService
   /** The most recently observed model route (captured on `llm/stream`). */
   route(): LlmRoute | undefined
+  /** The most recently observed session id (captured on `llm/stream`); routes may require it for transport headers. */
+  sessionId(): GenerateOptions['sessionId']
   /** The subagent runtime, when the host mounts one. */
   subagents(): SubagentRuntime | undefined
   /** Resolve the default repository root for an agent execution. */
@@ -98,7 +105,10 @@ function buildWorker(host: ToolHost, override: string | undefined, parent: Agent
     ...(subagents !== undefined ? { subagents } : {}),
     ...(parent !== undefined ? { parent } : {}),
     subagentProvider: host.config.subagentProvider,
+    ...(host.config.subagentPreset === undefined ? {} : { subagentPreset: host.config.subagentPreset }),
     maxTokens: host.config.maxTokens,
+    ...(host.config.llmReasoningEffort === undefined ? {} : { reasoningEffort: host.config.llmReasoningEffort }),
+    ...(host.sessionId() === undefined ? {} : { sessionId: host.sessionId() }),
   })
 }
 
@@ -116,7 +126,11 @@ function workerKind(host: ToolHost, override?: string, parentAvailable = true): 
   if (override === 'subagent' || override === 'llm') return override
   if (host.config.worker === 'llm') return 'llm'
   if (host.config.worker === 'subagent') return 'subagent'
-  return host.subagents() !== undefined && parentAvailable ? 'subagent' : 'llm'
+  // rc.2 scopes child tools through Agent Presets: without a read-only preset the
+  // subagent channel would run unrestricted, so auto falls back to the llm channel.
+  return host.subagents() !== undefined && parentAvailable && host.config.subagentPreset !== undefined
+    ? 'subagent'
+    : 'llm'
 }
 
 const REF_SCHEMA = {

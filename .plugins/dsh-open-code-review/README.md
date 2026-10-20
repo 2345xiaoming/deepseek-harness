@@ -13,7 +13,7 @@
 | 内置多语言规则集（54 份 rule docs + glob 映射） | `src/assets/rule-docs.ts`（全部移植，Apache-2.0） | 静态资产 |
 | Smart file bundling（关联文件成组） | `src/bundle.ts`：资源/i18n 变体、同名伴随文件、同目录关注点聚类，每组 ≤10 文件 | 纯函数 |
 | Review plan（预规划） | `src/worker.ts` plan task（移植上游 plan_task）：每 bundle 先产出 `summary` + 按严重级排序的风险点 + 上下文检查意图，注入 review prompt 的 `### Review Plan` 槽；规划失败 fail-open（评审照跑） | Review Worker seam |
-| Review agent（工具调用式深度评审） | `src/worker.ts` review worker seam：`createWorker` 构造，subagent adapter（`ctx.subagents.startActivation`，`delivery:'caller'`，只读 `toolFilter` + `maxDepth: 0`）与 llm adapter 两个实现；能力不足 fail loud，不静默降级 | `ctx.subagents`（spawn）+ `ctx.llm` |
+| Review agent（工具调用式深度评审） | `src/worker.ts` review worker seam：`createWorker` 构造，subagent adapter（`ctx.subagents.startActivation`，`delivery:'caller'`，只读 Agent Preset `agentPreset` + `maxDepth`）与 llm adapter 两个实现；能力不足 fail loud，不静默降级 | `ctx.subagents`（spawn）+ `ctx.llm` |
 | Comment re-location（定位模块） | `src/relocate.ts` 确定性半环：snippet 连续新增行逐字匹配（重复片段取声称行号最近者）+ 改动 hunk 校验；未锚定者走 **LLM re-location 回退**（`src/worker.ts` 的 relocate task，批量一次调用，返回的 snippet 重进确定性匹配）；失败 fail-open | 纯函数 + Review Worker seam |
 | Review filter（反思模块） | `src/worker.ts` 契约之家（`FILTER_SYSTEM_PROMPT` 移植含 protected-subject 否决权 + verdict 解析器）；失败 fail-open，绝不销毁 finding（[ADR-0001](docs/adr/0001-fail-open-filter.md)） | LLM worker |
 | Review Rules（项目自定义规则） | `.opencodereview/rule.json` 自动加载：默认替换系统规则（与上游一致）；`merge_system_rule: true` 时按上游模板合并（system 在前、user 在后） | 配置面 |
@@ -22,7 +22,7 @@
 | Session Viewer（结果浏览） | `GET /@dsh-external/dsh-open-code-review/api/last-run` + `conversation.view` findings 视图（按严重级分组渲染） | `ctx.webServer` + client slots |
 | 评论结构（path/line/severity/category） | `Finding` 规范值（critical/high/medium/low × bug/security/…/other） | 工具 canonical JSON |
 
-评审 worker 是**只读受限**子 agent（`toolFilter: read/read_image/grep/glob` + `maxDepth: 0`，防止评审过程改动仓库或递归委派；限制永不降级，[ADR-0002](docs/adr/0002-worker-restrictions-never-degrade.md)），输出 token 走 `maxTokens` 配置。
+评审 worker 是**只读受限**子 agent：工具面由 **Agent Preset** 决定（`subagentPreset` 指向只挂 read/read_image/grep/glob 的 preset，经 `agentPreset` 传入），并带 `maxDepth` 防止评审过程递归委派。rc.2 起子代理工具面只能由 preset 承载（`toolFilter` 已从启动请求移除），因此**未配置 preset 时 subagent 通道直接失败**，不会降级为无限制子 agent（[ADR-0002](docs/adr/0002-worker-restrictions-never-degrade.md)）；`worker: auto` 在这种情况下自动改用 llm 通道。输出 token 走 `maxTokens` 配置。
 未移植（超出插件范围）：CLI/TUI 本体、IDE 扩展、CI 集成、Session 持久化回放、MCP server、memory-compression 子任务（v1 简化）。
 
 ## 工具面
@@ -44,8 +44,9 @@
 ```yaml
 - name: '@dsh-external/dsh-open-code-review'
   config:
-    worker: auto          # auto|subagent|llm；auto 优先隔离子 agent
+    worker: auto          # auto|subagent|llm；auto 在配了 subagentPreset 时优先隔离子 agent，否则走 llm
     subagentProvider: spawn
+    subagentPreset: ''    # 只读 Agent Preset id（只挂 read/read_image/grep/glob）；subagent 通道必填
     maxTokens: 4096       # 单 worker 调用上限
     concurrency: 2        # bundle 并发（工具调用时可用 concurrency 参数按次覆盖）
     plan: true            # 每 bundle 先跑 plan task（预规划，注入 review 提示词；失败 fail-open）

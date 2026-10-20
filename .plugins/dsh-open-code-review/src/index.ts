@@ -12,6 +12,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type LlmService from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import z from '@deepseek-ai/schemastery'
 // Type-only imports land the service augmentations (`ctx.subagents`,
@@ -43,9 +45,21 @@ export interface Config {
   worker: 'auto' | 'subagent' | 'llm'
   /** Registered `ctx.subagents` provider name for isolated bundle workers. */
   subagentProvider: string
+  /**
+   * Agent Preset id mounting a read-only tool surface for isolated workers.
+   * Without it the subagent channel refuses to run (rc.2 scopes child tools
+   * through presets), and `worker: auto` falls back to the llm channel.
+   */
+  subagentPreset?: string
   /** LLM route for `llm` workers (provider + model must be set together). */
   llmProvider?: string
   llmModel?: string
+  /**
+   * Reasoning effort for `llm` workers. Unset leaves the field off the request so
+   * the route applies its own default; a route that does not support the
+   * requested effort refuses the call before I/O.
+   */
+  llmReasoningEffort?: string
   /**
    * Output-token ceiling for one worker request. A worker whose stream is cut
    * here returns no structured document and its whole bundle is skipped, so
@@ -76,8 +90,10 @@ export interface Config {
 export const Config: z<Config> = z.object({
   worker: z.union([z.const('auto'), z.const('subagent'), z.const('llm')]).default('auto'),
   subagentProvider: z.string().default('spawn'),
+  subagentPreset: z.string(),
   llmProvider: z.string(),
   llmModel: z.string(),
+  llmReasoningEffort: z.string(),
   maxTokens: z.number().min(256).max(65536).default(8192),
   toolTimeoutMs: z.number().min(60_000).max(3_600_000).default(1_800_000),
   concurrency: z.number().min(1).max(8).default(2),
@@ -132,21 +148,30 @@ export function apply(ctx: Context, config: Config): void {
   if ((llmProvider === undefined) !== (llmModel === undefined)) {
     throw new Error(`${name}: llmProvider and llmModel must be configured together`)
   }
+  const reasoningEffort = config.llmReasoningEffort !== undefined && config.llmReasoningEffort !== ''
+    ? ReasoningEffortId(config.llmReasoningEffort)
+    : undefined
   let observedRoute: LlmRoute | undefined
+  let observedSessionId: GenerateOptions['sessionId']
   let lastRun: RunRecord | undefined
 
-  // Observe the live model route for `llm` workers (waterfall must delegate).
+  // Observe the live model route and session id for `llm` workers: routes that
+  // stamp session-scoped transport headers (opencode-go) refuse a bare call
+  // (waterfall must delegate).
   ctx.on('llm/stream', (options, next) => {
     observedRoute = { provider: options.provider, model: options.model }
+    observedSessionId = options.sessionId
     return next()
   })
 
   const toolConfig: ToolHostConfig = {
     worker: config.worker,
     subagentProvider: config.subagentProvider,
+    ...(config.subagentPreset === undefined || config.subagentPreset === '' ? {} : { subagentPreset: config.subagentPreset }),
     ...(llmProvider !== undefined && llmModel !== undefined
       ? { llmRoute: { provider: llmProvider, model: llmModel } }
       : {}),
+    ...(reasoningEffort === undefined ? {} : { llmReasoningEffort: reasoningEffort }),
     maxTokens: config.maxTokens,
     toolTimeoutMs: config.toolTimeoutMs,
     concurrency: config.concurrency,
@@ -161,6 +186,7 @@ export function apply(ctx: Context, config: Config): void {
     config: toolConfig,
     llm: ctx.llm as LlmService,
     route: () => toolConfig.llmRoute ?? observedRoute,
+    sessionId: () => observedSessionId,
     subagents: () => ctx.get('subagents'),
     defaultRepo: (agent: Agent | undefined, signal?: AbortSignal): Promise<string> => {
       const service = ctx.get('workingDirectory')

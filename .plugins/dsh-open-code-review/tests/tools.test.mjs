@@ -44,6 +44,7 @@ function fakeHost(configOver = {}) {
     },
     llm: { stream: () => { throw new Error('unreachable: no route in this adapter') } },
     route: () => undefined,
+    sessionId: () => undefined,
     subagents: () => undefined,
     defaultRepo: async () => '/ignored',
     recordRun: (kind, payload) => { recorded.push({ kind, payload }) },
