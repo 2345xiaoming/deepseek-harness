@@ -72,7 +72,7 @@ function applyBrowserRunTool(ctx: Context): void {
       defineTool({
         name: 'browser_run',
         description:
-          'Run an ego-browser helper script: arbitrary JS with the full v2 harness face (flat helpers: snapshot/gotoAndWait/click/js/captureScreenshot/waitForElement/cdp/browserFetch; task-space API: taskSpace()/newTaskSpace()/claimTaskSpace()/listTaskSpaces(); site skills: runSiteTool/learnContext). console.log(...) inside the script is captured and returned as the tool result.',
+          'Run an ego-browser helper script: arbitrary JS with the full v2 harness face (flat helpers — snapshot(opts?) returns {content, refs}; gotoAndWait(url); click(target); js(expression) returns the evaluated value; captureScreenshot(path?, opts?) returns the absolute path written; waitForElement(selector, opts?); cdp(method, params); browserFetch(url, opts?); task-space API: taskSpace()/newTaskSpace()/claimTaskSpace()/listTaskSpaces(); site skills: runSiteTool/learnContext). console.log(...) inside the script is captured and returned as the tool result.',
         parameters: {
           js: {
             type: 'string',

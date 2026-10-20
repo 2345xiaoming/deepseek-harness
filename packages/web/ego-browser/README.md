@@ -40,9 +40,9 @@ With `dsh-ego-browser`, an agent drives the local Chrome (headless) through `bro
 | `browser_goto` | `url`, `timeout?` | Navigate the current tab and wait for it to load |
 | `browser_click` | `target` (`@N` / `loc=` / `xpath=` / CSS), `timeout?` | Click an element |
 | `browser_js` | `expression` | Evaluate JS in the page and return the serialized result: the script's completion value or an explicit `return`; top-level `await` is supported |
-| `browser_screenshot` | `path?`, `fullPage?` | Capture a PNG screenshot and return the file path |
+| `browser_screenshot` | `path?` (absolute), `fullPage?` | Capture a PNG screenshot and return the file path; a relative path is rejected |
 | `browser_wait` | `selector` / `loadState`, `timeout?` | Wait for an element (attached/visible) or a load state |
-| `browser_run` | `js` | Escape hatch: run arbitrary helper JS with the full v2 helper face (flat helpers: `snapshot`/`gotoAndWait`/`click`/`js`/`cdp`/`waitForElement`…; task space: `taskSpace()`/`newTaskSpace()`/`claimTaskSpace()`…; site skills: `runSiteTool`/`learnContext`); `console.log` is captured and returned |
+| `browser_run` | `js` | Escape hatch: run arbitrary helper JS with the full v2 helper face (flat helpers: `snapshot(opts?)` → `{content, refs}`, `gotoAndWait(url)`, `click(target)`, `js(expression)` → evaluated value, `captureScreenshot(path?, opts?)` → absolute path, `cdp`, `waitForElement`…; task space: `taskSpace()`/`newTaskSpace()`/`claimTaskSpace()`…; site skills: `runSiteTool`/`learnContext`); `console.log` is captured and returned |
 
 <a id="use-this-package"></a>
 ## Use this package

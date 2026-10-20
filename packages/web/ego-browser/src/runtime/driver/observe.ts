@@ -1,6 +1,6 @@
 // @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
 import { mkdir } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { state } from '../state.ts'
@@ -125,9 +125,10 @@ let screenshotSeq = 0
 
 /**
  * Capture a screenshot through the current Page session and write it to disk.
- * @param path - output path; omitted writes a unique file under the system temp directory.
+ * @param path - absolute output path; omitted writes a unique file under the system temp directory.
  * @param options - capture region, full-page flag, and scale mode.
  * @returns the path the PNG was written to.
+ * @throws TypeError when the path is relative.
  */
 export async function captureScreenshot(
   path?: string,
@@ -141,10 +142,11 @@ export async function captureScreenshot(
 /**
  * Capture a screenshot through one explicit target session. Page objects use
  * this entry point so another active tab cannot affect evaluation or capture.
- * @param path - output path; omitted writes a unique file under the system temp directory.
+ * @param path - absolute output path; omitted writes a unique file under the system temp directory.
  * @param options - capture region, full-page flag, and scale mode.
  * @param sessionId - target session to evaluate and capture in; omitted uses the current session.
  * @returns the path the PNG was written to.
+ * @throws TypeError when the path is relative.
  */
 export async function captureScreenshotForSession(
   path?: string,
@@ -152,6 +154,7 @@ export async function captureScreenshotForSession(
   sessionId?: string,
 ): Promise<string> {
   assertScreenshotScale(options.scale)
+  assertScreenshotPath(path)
   const outputPath =
     path ??
     join(tmpdir(), `ego-browser-shot-${process.pid}-${++screenshotSeq}.png`)
@@ -225,5 +228,20 @@ function assertScreenshotScale(
 ): asserts scale is ScreenshotScale | undefined {
   if (scale !== undefined && scale !== 'css') {
     throw new TypeError('captureScreenshot scale must be css')
+  }
+}
+
+/**
+ * Reject a relative screenshot path: the capture writes through the host
+ * process, so a relative path resolves against the host directory and escapes
+ * the session workspace instead of landing beside the caller's files.
+ * @param path - caller-supplied output path; omitted writes under the temp directory.
+ * @throws TypeError when the path is present and not absolute.
+ */
+function assertScreenshotPath(
+  path: string | undefined,
+): void {
+  if (path !== undefined && !isAbsolute(path)) {
+    throw new TypeError(`captureScreenshot path must be absolute: ${path}`)
   }
 }
