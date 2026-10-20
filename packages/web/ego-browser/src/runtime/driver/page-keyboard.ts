@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0 (strict:false); vendor exemption, not strict-checked.
 /** Page-side services the keyboard controller dispatches through. */
 export type PageKeyboardServices = {
   /** Send one raw CDP command; an omitted session targets the default Page. */

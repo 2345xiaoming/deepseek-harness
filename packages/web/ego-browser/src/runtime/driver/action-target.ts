@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0 (strict:false); vendor exemption, not strict-checked.
 /**
  * Browser-side helpers shared by selector actions that need composed-tree
  * relationships. Keep action policy at each call site: pointer actions and

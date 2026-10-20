@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0 (strict:false); vendor exemption, not strict-checked.
 import { setTimeout as delay } from 'node:timers/promises'
 
 const PROBE_TIMEOUT_MS = 500

@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0 (strict:false); vendor exemption, not strict-checked.
 /** Snapshot refs for one Page target, keyed by the `@N` id the Page API publishes. */
 export class RefMap {
   /** Public ref id to the node identity, accessible name, and frame recorded for it. */

@@ -1,10 +1,10 @@
-// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0 (strict:false); vendor exemption, not strict-checked.
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { setOverrides, state } from './state.ts'
-import { invokeEgo, probeAgentControl } from './ego-errors.ts'
+import { buildEgoError, invokeEgo, probeAgentControl } from './ego-errors.ts'
 import { help as helpRuntime, formatHelp } from './help-runtime.ts'
 import { validatePublicApiOptions } from './public-api-schema.ts'
 import { createStaleEgoBrowserGuard } from './skill-migration.ts'
@@ -128,6 +128,8 @@ export async function profiles(): Promise<any> {
  * bridge when real commands run, not here. The rows below describe what each helper
  * does when the target space is user-owned:
  *
+ *   taskSpace / useOrCreateTaskSpace    -> by name: throws EGO_TASK_SPACE_NAME_IN_USE;
+ *                                          by id: selects it unclaimed (user-control error surfaces)
  *   switchTaskSpace                     -> throws (agent-owned only)
  *   claimTaskSpace                      -> claims it (ownership transfers to the agent), then selects it
  *   handOffTaskSpace                    -> skipped, resolves { done: false, skipped: "user-owned" }
@@ -220,9 +222,11 @@ async function createTaskSpaceResolution(
 }
 
 /**
- * Use an existing agent-owned task space, or create it when missing. User-owned
- * spaces are selected but not claimed (the EGO_TASK_SPACE_USER_IN_CONTROL error
- * surfaces) — call claimTaskSpace(nameOrId) to take ownership.
+ * Use an existing agent-owned task space, or create it when missing. A name held
+ * by a user-owned space fails with EGO_TASK_SPACE_NAME_IN_USE; a user-owned space
+ * passed by numeric id is selected but not claimed (the
+ * EGO_TASK_SPACE_USER_IN_CONTROL error surfaces). Call claimTaskSpace(id) to take
+ * ownership once the user asks.
  * @param nameOrId - task space name or numeric id.
  * @returns the resolved task space handle.
  */
@@ -233,7 +237,11 @@ export async function useOrCreateTaskSpace(
   return (await resolveTaskSpace(nameOrId)).descriptor
 }
 
-async function resolveTaskSpace(nameOrId, options: { select?: boolean } = {}) {
+async function resolveTaskSpace(
+  nameOrId,
+  options: { select?: boolean; op?: string } = {},
+) {
+  const op = options.op ?? 'useOrCreateTaskSpace'
   const spaces = await listTaskSpaces()
   const existing = findMatchingTaskSpace(spaces, nameOrId)
   if (!existing) {
@@ -258,10 +266,25 @@ async function resolveTaskSpace(nameOrId, options: { select?: boolean } = {}) {
     }
   }
   if (existing.ownership === 'user') {
-    // Don't claim user-owned spaces here. Select it as-is; the user stays in
-    // control, so EGO_TASK_SPACE_USER_IN_CONTROL surfaces (as ego-browser's owned
-    // guidance, not the raw native text). Call claimTaskSpace(nameOrId) to take
-    // ownership.
+    // A name match on a user-owned space is a name collision, not the agent's
+    // task: the user is not in control of something the agent started. Report it
+    // the way native createTaskSpace reports a duplicate name.
+    if (typeof nameOrId === 'string' && existing.name === nameOrId) {
+      throw buildEgoError(
+        {
+          error: [
+            `A task space named ${JSON.stringify(nameOrId)} already exists and belongs to the user (id ${existing.id}).`,
+            `Do not take it over on your own. Ask the user whether to work in it; only if they agree, call claimTaskSpace(${existing.id}).`,
+            'Otherwise use a different task space name.',
+          ].join('\n'),
+          error_code: 'EGO_TASK_SPACE_NAME_IN_USE',
+        },
+        op,
+      )
+    }
+    // Explicitly targeted by id: don't claim it here. Select it as-is; the user
+    // stays in control, so EGO_TASK_SPACE_USER_IN_CONTROL surfaces (as
+    // ego-browser's owned guidance, not the raw native text).
     return {
       descriptor:
         options.select === false
@@ -296,7 +319,7 @@ export async function taskSpace(
   const { profileId } = options
   if (profileId === undefined) {
     return initializeResolvedTaskSpace(
-      await resolveTaskSpace(nameOrId, { select: false }),
+      await resolveTaskSpace(nameOrId, { select: false, op: 'taskSpace' }),
     )
   }
   if (typeof nameOrId !== 'string') {

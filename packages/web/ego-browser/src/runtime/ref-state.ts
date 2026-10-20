@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0 (strict:false); vendor exemption, not strict-checked.
 import { parseRef, RefMap } from './ref-map.ts'
 
 /** Ref map for the current Page, shared by every ported browser helper. */

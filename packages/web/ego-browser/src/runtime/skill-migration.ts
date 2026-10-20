@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0 (strict:false); vendor exemption, not strict-checked.
 import { markHardStop } from './output-sink.ts'
 
 /** Prefix on the hard-stop message raised for a script that still calls the 1.3 Skill facade. */

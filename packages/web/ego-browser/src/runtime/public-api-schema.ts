@@ -1,4 +1,4 @@
-// @ts-nocheck — ported from ego-browser v2.1.0-beta.2 (strict:false); vendor exemption, not strict-checked.
+// @ts-nocheck — ported from ego-browser v2.1.0 (strict:false); vendor exemption, not strict-checked.
 /** Accepted option kinds; each selects one validation rule in validateOptionValue. */
 export type PublicApiOptionKind =
   | 'boolean'
@@ -75,7 +75,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     name: 'taskSpace',
     signature: 'await taskSpace(nameOrId, { profileId? })',
     summary:
-      'Reuse or create an Agent-owned task space; a new space starts with managed Page p1, and profileId applies only when creating it.',
+      'Reuse or create an Agent-owned task space; a name held by a user-owned space fails with EGO_TASK_SPACE_NAME_IN_USE. A new space starts with managed Page p1, and profileId applies only when creating it.',
     options: {
       profileId: option(
         'nonEmptyString',
