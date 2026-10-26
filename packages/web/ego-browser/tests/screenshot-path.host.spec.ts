@@ -14,6 +14,6 @@ describe('screenshot output path', () => {
   it('does not reject an absolute path on the path assertion', async () => {
     const failure = await captureScreenshotForSession('/tmp/ego-browser-path-test.png')
       .then(() => undefined, (error: unknown) => error as Error)
-    expect(String(failure?.message ?? '')).not.toMatch(/must be absolute/)
+    expect(failure?.message ?? '').not.toMatch(/must be absolute/)
   })
 })
