@@ -40,9 +40,9 @@ kind: "package-bundle"
 | `browser_goto` | `url`、`timeout?` | 导航当前标签并等待加载 |
 | `browser_click` | `target`（`@N` / `loc=` / `xpath=` / CSS）、`timeout?` | 点击元素 |
 | `browser_js` | `expression` | 页面内求值 JS 并返回序列化结果：脚本完成值或显式 `return`；支持顶层 `await` |
-| `browser_screenshot` | `path?`、`fullPage?` | 截图 PNG，返回文件路径 |
+| `browser_screenshot` | `path?`（绝对路径）、`fullPage?` | 截图 PNG 并返回文件路径；相对路径会被拒绝 |
 | `browser_wait` | `selector` / `loadState`、`timeout?` | 等待元素（attached/visible）或加载态 |
-| `browser_run` | `js` | 逃生舱：执行任意 helper JS，暴露完整 v2 helper face（扁平函数：`snapshot`/`gotoAndWait`/`click`/`js`/`cdp`/`waitForElement`…；任务空间：`taskSpace()`/`newTaskSpace()`/`claimTaskSpace()`…；site skills：`runSiteTool`/`learnContext`），`console.log` 被捕获返回 |
+| `browser_run` | `js` | 逃生舱：执行任意 helper JS，暴露完整 v2 helper face（扁平函数：`snapshot(opts?)` → `{content, refs}`、`gotoAndWait(url)`、`click(target)`、`js(expression)` → 求值结果、`captureScreenshot(path?, opts?)` → 绝对路径、`cdp`、`waitForElement`…；任务空间：`taskSpace()`/`newTaskSpace()`/`claimTaskSpace()`…；site skills：`runSiteTool`/`learnContext`），`console.log` 被捕获返回 |
 
 <a id="use-this-package"></a>
 ## 使用本包
@@ -105,11 +105,12 @@ node packages/web/ego-browser/tests/smoke.mjs
 <a id="porting-notes"></a>
 ## 移植说明
 
-`src/runtime/` 是从 [citrolabs/ego-lite](https://github.com/citrolabs/ego-lite) tag `v2.1.0-beta.2`（`package/ego-browser/src`）移植的 harness 源码，与上游保持 1:1 文件对应（仅不含上游的包入口 `index.ts`，由本包的 `src/index.ts` 取代）。import 后缀 `.js`→`.ts` 适配 DSH 的 `moduleResolution: bundler`，并以 `// @ts-nocheck` 豁免其原 `strict:false` 下的隐式 any（vendor 移植豁免；本包自写代码保持严格检查）。移植面包括 `page-model.ts`/`page-ledger.ts`/`page-discovery.ts`/`native-gate.ts`/`public-api-schema.ts`/`snapshot-result.ts`/`clipboard.ts`/`skill-migration.ts`/`driver/downloads.ts` 等。桥实现见 `src/bridge/`（`chrome.ts` 生命周期、`ws-cdp.ts` CDP 传输 + 任务空间 shim、`snapshot.ts` AX 快照）。
+`src/runtime/` 是从 [citrolabs/ego-lite](https://github.com/citrolabs/ego-lite) tag `v2.1.0`（`package/ego-browser/src`）移植的 harness 源码，与上游保持 1:1 文件对应（仅不含上游的包入口 `index.ts`，由本包的 `src/index.ts` 取代）。import 后缀 `.js`→`.ts` 适配 DSH 的 `moduleResolution: bundler`，并以 `// @ts-nocheck` 豁免其原 `strict:false` 下的隐式 any（vendor 移植豁免；本包自写代码保持严格检查）。移植面包括 `page-model.ts`/`page-ledger.ts`/`page-discovery.ts`/`native-gate.ts`/`public-api-schema.ts`/`snapshot-result.ts`/`clipboard.ts`/`skill-migration.ts`/`driver/downloads.ts` 等。桥实现见 `src/bridge/`（`chrome.ts` 生命周期、`ws-cdp.ts` CDP 传输 + 任务空间 shim、`snapshot.ts` AX 快照）。
 
 重移植时需重新施加的本地改动（上游未收录，均为 DSH 侧必需）：
 
 - `driver/nav.ts`：`gotoAndWait` 在 `Page.navigate` 返回 `errorText` 或 `isDownload` 时抛错，避免把失败导航报成成功。
+- `driver/observe.ts`：`captureScreenshotForSession` 在任何浏览器操作之前拒绝相对输出路径——宿主进程会按自身目录解析它并逃出会话工作区（上游的绝对路径修复只覆盖 `download.saveAs`；截图路径契约属于本包的工具层）。
 - `helpers.ts`：`taskSpace`/`useOrCreateTaskSpace`/`claimTaskSpace`/`takeOverTaskSpace` 补显式返回类型标注（声明合成无法命名匿名类的私有成员）。
 - `page-ledger.ts`：动态删除改用 `Reflect.deleteProperty`（`typescript/no-dynamic-delete` 为 error 且不可自动修复）。
 - `skill-migration.ts`：恢复指令保留 DSH 措辞——上游文本指向其自有 CLI `ego-browser skill`，本包不提供该命令。
