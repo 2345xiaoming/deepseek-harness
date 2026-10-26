@@ -1,0 +1,79 @@
+/**
+ * Wire-level shapes of the manager's settings section, shared by the host half
+ * (its source of truth) and the client half (the settings section form). The
+ * client bundle never imports the host module; both import this file.
+ * env/headers values are wire-redacted secrets: the entry's `describe`
+ * response omits them and lists their paths in `secrets`.
+ */
+
+/**
+ * Settings namespace = the plugin's own loader entry id, whose
+ * `config.servers` volatile field is the sole source of truth. Spelled in both
+ * halves: the client bundle must not import the host module, and the id is
+ * declared by this plugin's own bundle patch.
+ */
+export const MCP_SETTINGS_ENTRY = 'dsh-mcp-settings'
+
+/** Status route served by the host manager to the settings section. */
+export const STATUS_PATH = '/@dsh-external/dsh-mcp-settings/status'
+
+/** Toggle route for patch-configured (loader) mcp-client rows. */
+export const TOGGLE_CONFIG_ROW_PATH = '/@dsh-external/dsh-mcp-settings/config-rows/toggle'
+
+/** The transports the page manages, mirroring mcp-client's discriminant. */
+export type McpTransport = 'stdio' | 'streamable-http'
+
+/** One managed MCP server as stored in the settings document. */
+export interface McpServerEntryWire {
+  enabled?: boolean
+  transport: McpTransport
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  cwd?: string
+  url?: string
+  headers?: Record<string, string>
+}
+
+/** Resolved shape of the whole namespace section. */
+export interface McpServersSectionWire {
+  servers: Record<string, McpServerEntryWire>
+}
+
+/** mcp-client's serverName charset, mirrored for client-side form validation. */
+export const SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/
+
+/** Structurally narrow a wire section; undefined keeps the last accepted snapshot. */
+export function decodeMcpServersSection(section: unknown): McpServersSectionWire | undefined {
+  if (typeof section !== 'object' || section === null) return undefined
+  const servers = (section as { servers?: unknown }).servers
+  if (typeof servers !== 'object' || servers === null || Array.isArray(servers)) return undefined
+  return { servers: servers as Record<string, McpServerEntryWire> }
+}
+
+/** One server's projected runtime state from the Host status route. */
+export interface McpServerStatusWire {
+  /** Whether the entry is enabled (mounted or mounting). */
+  enabled: boolean
+  /** Last mount error, when the last mount attempt rejected. */
+  error?: string
+  /** Count of live `mcp__<name>__*` tools in the global layer. */
+  toolCount: number
+}
+
+/** JSON payload of the Host status route. */
+export interface McpStatusDocumentWire {
+  servers: Record<string, McpServerStatusWire>
+  /** Patch-configured mcp-client rows projected from the loader (read-only config, toggleable). */
+  configRows: McpConfigRowStatusWire[]
+}
+
+/** One patch-configured mcp-client row's projected state. */
+export interface McpConfigRowStatusWire {
+  /** The mcp-client serverName of the row. */
+  serverName: string
+  /** Whether the loader entry is currently enabled. */
+  enabled: boolean
+  /** Count of live `mcp__<serverName>__*` tools in the global layer. */
+  toolCount: number
+}

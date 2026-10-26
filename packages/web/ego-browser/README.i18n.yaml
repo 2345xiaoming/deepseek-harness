@@ -1,0 +1,61 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/web/ego-browser/README.md
+/:
+  en: b1bb6eb3b5a1d736
+  zh: 7412abb0b7cb4e98
+/deepseek-ai-dsh-ego-browser:
+  en: 4e52c7ea959c9715
+  zh: ffa3a2544a2ca853
+/deepseek-ai-dsh-ego-browser/summary:
+  en: 2bab9a6ad1ddb347
+  zh: 4d260cf3edb6ee3c
+/deepseek-ai-dsh-ego-browser/table-of-contents:
+  en: c150986e045011c3
+  zh: 294e0c8f9ca8c0d4
+/deepseek-ai-dsh-ego-browser/highlights:
+  en: 8b9592a2d54e006a
+  zh: f7a3f7a7907caf90
+/deepseek-ai-dsh-ego-browser/tools:
+  en: 144ef7ad5ebbf38b
+  zh: 77bdaad99df8ace6
+/deepseek-ai-dsh-ego-browser/use-this-package:
+  en: 14559ccd4dcbbcd7
+  zh: 770df572b8d9a48a
+/deepseek-ai-dsh-ego-browser/configuration:
+  en: f1fd334b3ef65b83
+  zh: bf8d51d80de92f08
+/deepseek-ai-dsh-ego-browser/chrome:
+  en: 1f0d2c6855894e59
+  zh: 65d11691f5e523cd
+/deepseek-ai-dsh-ego-browser/positioning-against-the-existing-dsh-web-tools:
+  en: 0c80d7159bfaf210
+  zh: 65f7e6dd8224dce5
+/deepseek-ai-dsh-ego-browser/development:
+  en: bfe4ac64fbe7b5c6
+  zh: 88f35af3e1d5b2d1
+/deepseek-ai-dsh-ego-browser/porting-notes:
+  en: 6d0e514110c834d9
+  zh: dc46c7fcdfd30fcc
+/deepseek-ai-dsh-ego-browser/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-ego-browser/model-experience/browser-tool-definitions:
+  en: aa14844db85d03b5
+  zh: 1826d4b45a3325c5
+/deepseek-ai-dsh-ego-browser/model-experience/browser-tool-definitions/what-the-model-sees:
+  en: b6f70be687254286
+  zh: a657b50e73fa8884
+/deepseek-ai-dsh-ego-browser/model-experience/browser-tool-definitions/token-effect:
+  en: a5668cb8967ecede
+  zh: d637455a88cc02fb
+/deepseek-ai-dsh-ego-browser/model-experience/browser-tool-definitions/kv-cache-effect:
+  en: 755aca398d23c8c1
+  zh: 700cd2a0dfaf41e2
+/deepseek-ai-dsh-ego-browser/known-limitations-and-deferred-work:
+  en: e0cee6927625881e
+  zh: 4054ca832df24370
+/deepseek-ai-dsh-ego-browser/known-limitations-and-deferred-work/dev-note:
+  en: ac26655016ce1a84
+  zh: edd246cc7aa064c8

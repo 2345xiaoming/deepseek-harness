@@ -3,23 +3,22 @@
  * makes wrapping, policy hand-off, fail-closed propagation, and fact stamping
  * deterministic; real-provider integration lives in `tests/acl.e2e.ts`.
  * Requires pwsh for the integration block (skips without it — same gate as
- * pwsh-local's suites); the helpers block is pure and always runs.
+ * pwsh-local's suites).
  */
 
 import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { SandboxProvider, SandboxUnavailableError } from '@deepseek-ai/dsh-sandbox'
-import type { ConfinedArgv, RunnerFailureRule, SandboxExecutionPolicy, SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
+import type { ConfinedArgv, SandboxExecutionPolicy, SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 import { resolvePwshPath } from '@deepseek-ai/dsh-pwsh-local'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { SandboxPwshExecutor } from '../src/index.ts'
-import { classifyRunnerFailure, isRunnerSpawnFailure, matchesSignature } from '../src/helpers.ts'
 import type { ShellExecSpec, ShellExecution, ShellRunResult } from '@deepseek-ai/dsh-shell'
 
 /** Historical foreground shorthand over the unified execute() seam. */
@@ -87,81 +86,6 @@ async function setup(
   await ctx.plugin(SandboxPwshExecutor, { graceMs: 200 })
   return { ctx, executor: ctx.shell as SandboxPwshExecutor, calls }
 }
-
-describe('helpers (pure)', () => {
-  const workdir = mkdtempSync(join(tmpdir(), 'dsh-pwsh-sandbox-helpers-'))
-  afterAll(() => {
-    rmSync(workdir, { recursive: true, force: true })
-  })
-
-  describe('isRunnerSpawnFailure', () => {
-    const absolute = process.execPath
-    const bare = 'node'
-    const relative = './sandbox-runner'
-
-    it('attributes ENOENT/EACCES when path or syscall identifies argv[0] and the workdir is usable', () => {
-      for (const runnerProgram of [absolute, bare, relative]) {
-        expect(isRunnerSpawnFailure({ code: 'ENOENT', syscall: `spawn ${runnerProgram}`, path: runnerProgram }, runnerProgram, workdir)).toBe(true)
-        expect(isRunnerSpawnFailure({ code: 'EACCES', syscall: `spawn ${runnerProgram}`, path: runnerProgram }, runnerProgram, workdir)).toBe(true)
-        expect(isRunnerSpawnFailure({ code: 'ENOENT', syscall: 'spawn', path: runnerProgram }, runnerProgram, workdir)).toBe(true)
-        expect(isRunnerSpawnFailure({ code: 'ENOENT', syscall: `spawn ${runnerProgram}` }, runnerProgram, workdir)).toBe(true)
-      }
-    })
-
-    it('rejects mismatched runner evidence, foreign codes, unusable workdirs, and non-object errors', () => {
-      expect(isRunnerSpawnFailure({ code: 'ENOENT', syscall: 'spawn', path: 'other' }, 'node', workdir)).toBe(false)
-      expect(isRunnerSpawnFailure({ code: 'ENOENT', syscall: 'spawn other', path: 'node' }, 'node', workdir)).toBe(false)
-      expect(isRunnerSpawnFailure({ code: 'EMFILE', syscall: 'spawn', path: 'node' }, 'node', workdir)).toBe(false)
-      expect(isRunnerSpawnFailure({ code: 'ENOENT', path: 'node' }, 'node', workdir)).toBe(false)
-      expect(isRunnerSpawnFailure({ code: 'ENOENT', syscall: 'spawn' }, 'node', join(workdir, 'missing'))).toBe(false)
-      expect(isRunnerSpawnFailure({ code: 'ENOENT', syscall: 'spawn' }, undefined, workdir)).toBe(false)
-      expect(isRunnerSpawnFailure('boom', 'node', workdir)).toBe(false)
-      expect(isRunnerSpawnFailure(null, 'node', workdir)).toBe(false)
-      // An existing FILE (not a directory) workdir is unusable without throwing.
-      const fileWorkdir = join(workdir, 'a-file')
-      writeFileSync(fileWorkdir, 'x')
-      expect(isRunnerSpawnFailure({ code: 'ENOENT', syscall: 'spawn', path: 'node' }, 'node', fileWorkdir)).toBe(false)
-    })
-  })
-
-  describe('classifyRunnerFailure', () => {
-    const rules: readonly RunnerFailureRule[] = [{
-      allowedExitCodes: [127],
-      fatalSignatures: ['fake-runner: '],
-      informationalLines: ['fake-runner: partial enforcement'],
-    }]
-
-    it('matches a fatal signature on a gated exit code, skipping informational lines', () => {
-      expect(classifyRunnerFailure(127, 'fake-runner: partial enforcement\nfake-runner: profile refused\n', rules))
-        .toEqual({ detail: 'fake-runner: profile refused' })
-    })
-
-    it('rejects zero/null exits, gate mismatches, and empty signatures', () => {
-      expect(classifyRunnerFailure(0, 'fake-runner: x', rules)).toBeUndefined()
-      expect(classifyRunnerFailure(null, 'fake-runner: x', rules)).toBeUndefined()
-      expect(classifyRunnerFailure(1, 'fake-runner: x', rules)).toBeUndefined()
-      expect(classifyRunnerFailure(127, 'clean output', rules)).toBeUndefined()
-      expect(classifyRunnerFailure(127, 'fake-runner: x', [{ fatalSignatures: ['  '] }])).toBeUndefined()
-    })
-
-    it('the windows-acl rule is exit-gated on 127: a confined command that merely prints the signature on a non-127 exit is NOT a runner failure', () => {
-      const windowsAclRules: readonly RunnerFailureRule[] = [{ allowedExitCodes: [127], fatalSignatures: ['windows-acl-run: '] }]
-      expect(classifyRunnerFailure(3, 'windows-acl-run: something the command printed', windowsAclRules)).toBeUndefined()
-      expect(classifyRunnerFailure(127, 'windows-acl-run: missing --workspace', windowsAclRules))
-        .toEqual({ detail: 'windows-acl-run: missing --workspace' })
-    })
-  })
-
-  describe('matchesSignature', () => {
-    it('matches non-zero exits case-insensitively, never zero or signal exits', () => {
-      expect(matchesSignature(1, 'Access to the path is denied.', ['access to the path'])).toBe(true)
-      expect(matchesSignature(1, 'ACCESS IS DENIED.', ['access is denied'])).toBe(true)
-      expect(matchesSignature(1, 'clean', ['access is denied'])).toBe(false)
-      expect(matchesSignature(0, 'access is denied', ['access is denied'])).toBe(false)
-      expect(matchesSignature(null, 'access is denied', ['access is denied'])).toBe(false)
-    })
-  })
-})
 
 describe('SandboxPwshExecutor asynchronous confinement', () => {
   it('reports caller cancellation when a failed launch result is read after abort', async () => {

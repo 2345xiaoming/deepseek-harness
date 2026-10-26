@@ -47,3 +47,13 @@ worktrees/
 .agents/worktrees/
 .typert-*/
 native/system/test/bin/
+# Download, extract, and backup area for the routing-suite plugin artifacts
+# (tarballs, third-party sources, profile backups); not repository source.
+.scratch-routing/
+# Plugin research corpus: third-party rule-doc copies studied while porting the
+# OpenCodeReview plugin. They stay beside the work, never as tracked files, so
+# repository gates do not read copies as maintained prose.
+.plugins/_research/
+# Generated plugin reports (architecture reviews and similar) stay outside the
+# tracked tree; they are run artifacts, not repository source.
+.plugins/_reports/

@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.1-alpha.2/pi-ai-provider-catalog/guide.md
+/:
+  en: 276940799df2aed6
+  zh: ba772a9317cc8192
+/the-pi-ai-provider-catalog-renames-azure-openai-responses-to-azure:
+  en: 2bce2121845b679f
+  zh: 7903ab0cbb6a1c26
+/the-pi-ai-provider-catalog-renames-azure-openai-responses-to-azure/change:
+  en: 7ea3c469c628207b
+  zh: 065ed4397fbcb29e
+/the-pi-ai-provider-catalog-renames-azure-openai-responses-to-azure/migration:
+  en: 43de61fdeb0d11ce
+  zh: b79c21c0d1748d4c
