@@ -12,7 +12,7 @@ export interface ToolArgSchema {
 }
 
 /** A Node or browser site tool declared in a site skill's manifest.json. */
-export interface ToolSchema {
+export interface SiteToolSchema {
   description: string
   path: string
   args: Record<string, ToolArgSchema>
@@ -20,7 +20,7 @@ export interface ToolSchema {
 }
 
 /** A Node site tool, which also names the module export the runner invokes. */
-export interface NodeToolSchema extends ToolSchema {
+export interface NodeToolSchema extends SiteToolSchema {
   callable: string
 }
 
@@ -31,7 +31,7 @@ export interface LearningManifest {
   domains: string[]
   notes: string[]
   nodeTools?: Record<string, NodeToolSchema>
-  browserTools?: Record<string, ToolSchema>
+  browserTools?: Record<string, SiteToolSchema>
 }
 
 /** A site skill with its note and tool paths resolved against its directory. */
@@ -42,7 +42,7 @@ export interface LearningEntry {
   domains: string[]
   notes: string[]
   nodeTools: Record<string, NodeToolSchema>
-  browserTools: Record<string, ToolSchema>
+  browserTools: Record<string, SiteToolSchema>
 }
 
 /** Learned context for one URL: whether a skill matched, its identity, notes, and tool signatures. */
@@ -281,7 +281,7 @@ function toolSchemasNode(
 
 function toolSchemasBrowser(
   manifest: LearningManifest,
-): Record<string, ToolSchema> {
+): Record<string, SiteToolSchema> {
   const value = manifest.browserTools
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
   return { ...value }

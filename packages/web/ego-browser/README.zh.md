@@ -114,6 +114,7 @@ node packages/web/ego-browser/tests/smoke.mjs
 - `helpers.ts`：`taskSpace`/`useOrCreateTaskSpace`/`claimTaskSpace`/`takeOverTaskSpace` 补显式返回类型标注（声明合成无法命名匿名类的私有成员）。
 - `page-ledger.ts`：动态删除改用 `Reflect.deleteProperty`（`typescript/no-dynamic-delete` 为 error 且不可自动修复）。
 - `skill-migration.ts`：恢复指令保留 DSH 措辞——上游文本指向其自有 CLI `ego-browser skill`，本包不提供该命令。
+- `learning/check-domain-learning.ts`：站点工具 manifest 接口名为 `SiteToolSchema`——移植名 `ToolSchema` 会与 `@deepseek-ai/dsh-llm` 的 `ToolSchema` 撞名，而 Cordis 运行时 API 目录会丢弃任何重名类型（`gen-cordis-catalog`），进而让 `cordis_runtime_inspect` 提供的目录里缺少 `dsh-llm` 那一条。
 - `learning/index.ts`：保留 `returns` 字段；示例文本随上游（`runSiteTool`/`runSiteBrowserTool` 才是本包实际暴露的扁平 helper）。
 - `page-context-guard.ts`：字符类写作 `[a-z_$]`（该正则带 `/i`，与上游 `[A-Za-z_$]` 等价）。
 - 移植面 lint 适配：`clipboard.ts` 的 catch 参数写作 `_error`；`element-resolver.ts` 中未使用的上游函数保留 `no-unused-vars` 豁免；`page-model.ts` 中闭包先读、随后赋值的 `timer` 保留 `prefer-const` 豁免。

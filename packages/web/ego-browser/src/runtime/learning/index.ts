@@ -15,7 +15,7 @@ import {
   LearnedKnowledgeNote,
   LearnedToolSignature,
   NodeToolSchema,
-  ToolSchema,
+  SiteToolSchema,
 } from './check-domain-learning.ts'
 
 export {
@@ -90,7 +90,7 @@ export async function loadLearnedContext(
       })
     }
 
-    const browserTools: Record<string, ToolSchema> = entry.browserTools || {}
+    const browserTools: Record<string, SiteToolSchema> = entry.browserTools || {}
     for (const [toolName, schema] of Object.entries(browserTools)) {
       toolSignatures.push({
         siteId,

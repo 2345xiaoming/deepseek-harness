@@ -114,6 +114,7 @@ Local changes to re-apply on a re-port (not accepted upstream; all required on t
 - `helpers.ts`: `taskSpace`/`useOrCreateTaskSpace`/`claimTaskSpace`/`takeOverTaskSpace` carry explicit return type annotations (declaration synthesis cannot name the anonymous class's private members).
 - `page-ledger.ts`: dynamic deletion goes through `Reflect.deleteProperty` (`typescript/no-dynamic-delete` is an error with no autofix).
 - `skill-migration.ts`: the restore instruction keeps DSH wording — the upstream text points at upstream's own CLI `ego-browser skill`, which this package does not provide.
+- `learning/check-domain-learning.ts`: the site-tool manifest interface is `SiteToolSchema` — the ported name `ToolSchema` would collide with `@deepseek-ai/dsh-llm`'s `ToolSchema`, and the Cordis runtime API catalog drops every type name declared twice (`gen-cordis-catalog`), which then removes the `dsh-llm` entry from the catalog that `cordis_runtime_inspect` serves.
 - `learning/index.ts`: the `returns` field is retained; the example text follows upstream (`runSiteTool`/`runSiteBrowserTool` are the flat helpers this package actually exposes).
 - `page-context-guard.ts`: the character class is written `[a-z_$]` (the regex carries `/i`, equivalent to upstream's `[A-Za-z_$]`).
 - Ported-surface lint adaptations: the `clipboard.ts` catch parameter is written `_error`; unused upstream functions in `element-resolver.ts` keep a `no-unused-vars` exemption; the `timer` in `page-model.ts` that a closure reads before it is assigned keeps a `prefer-const` exemption.
