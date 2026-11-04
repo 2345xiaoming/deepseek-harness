@@ -66,11 +66,12 @@ jobs:
   # Stable required check for the Python lanes, with the same semantics as
   # ci.yml's "all checks passed": every blocking job in THIS workflow is
   # listed in `needs`. The bookkeeping job follows the Linux failover switch
-  # like the other verdicts.
+  # like the other verdicts, and DSH_CI_HOSTED=true routes it onto ubuntu-latest.
   python-checks-passed:
     name: python checks passed
     runs-on: >-
-      ${{ vars.DSH_CI_FAILOVER_LINUX == 'blacksmith' && 'blacksmith-4vcpu-ubuntu-2404'
+      ${{ vars.DSH_CI_HOSTED == 'true' && 'ubuntu-latest'
+          || vars.DSH_CI_FAILOVER_LINUX == 'blacksmith' && 'blacksmith-4vcpu-ubuntu-2404'
           || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "linux", "x64", "vm-backup"]')
