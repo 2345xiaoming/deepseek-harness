@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import * as EgoBrowser from '../src/index.ts'
 
@@ -16,20 +17,25 @@ async function mount(): Promise<{
   ctx: Context
   fiber: Awaited<ReturnType<Context['plugin']>>
   names: string[]
-  call: (name: string, args: unknown) => ReturnType<ToolRuntime['execute']>
+  call: (name: string, args: unknown) => Promise<ToolExecutionResult>
 }> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   const fiber = await ctx.plugin(EgoBrowser, { enabled: true })
   const names = ctx.tools.schemas().map(s => s.name)
-  const call = (name: string, args: unknown) =>
-    ctx.tools.execute({
-      name,
-      arguments: args,
-      callId: ToolCallId('ego-browser-test'),
+  const call = async (name: string, args: unknown) => {
+    const batch = await ctx.tools.execute({
       signal: new AbortController().signal,
+      calls: [{
+        type: 'tool-call',
+        id: ToolCallId('ego-browser-test'),
+        name,
+        arguments: JSON.stringify(args),
+      }],
     })
+    return batch.results[0]!.result
+  }
   return { ctx, fiber, names, call }
 }
 

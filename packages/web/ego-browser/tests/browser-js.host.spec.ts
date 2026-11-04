@@ -39,13 +39,18 @@ describeBrowser('browser_js against real Chrome', () => {
       await ctx.plugin(ToolRuntime)
       const fiber = await ctx.plugin(EgoBrowser, { enabled: true })
       try {
-        const call = (name: string, args: unknown) =>
-          ctx.tools.execute({
-            name,
-            arguments: args,
-            callId: ToolCallId('ego-browser-browser-js'),
+        const call = async (name: string, args: unknown) => {
+          const batch = await ctx.tools.execute({
             signal: new AbortController().signal,
+            calls: [{
+              type: 'tool-call',
+              id: ToolCallId('ego-browser-browser-js'),
+              name,
+              arguments: JSON.stringify(args),
+            }],
           })
+          return batch.results[0]!.result
+        }
         const evaluate = async (expression: string): Promise<unknown> => {
           const result = await call('browser_js', { expression })
           expect(result.isError).not.toBe(true)
