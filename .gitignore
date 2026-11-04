@@ -61,3 +61,6 @@ native/system/test/bin/
 # Generated plugin reports (architecture reviews and similar) stay outside the
 # tracked tree; they are run artifacts, not repository source.
 .plugins/_reports/
+
+# Local scratch checkouts (dsh-superagent prototype, plugin research)
+.scratch/
