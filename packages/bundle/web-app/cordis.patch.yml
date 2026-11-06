@@ -29,6 +29,13 @@
     path: ':memory:'
     openAt: never
 
+# Browser automation is opt-in per surface: the base row registers no browser
+# tools, so a profile that never drives a browser spends none of its tool-schema
+# or prompt budget on them. The Web surface enables them for its agents.
+- id: ego-browser
+  config:
+    enabled: true
+
 - id: tools
   config:
     # TEMPORARY workaround: DSH_TOOLS_MODE (native|ptc) opts a whole dsh
@@ -85,6 +92,10 @@
         iconTimeoutMs: 10000
         launchWatchMs: 1000
 
+    - id: ui-file-actions
+      name: '@deepseek-ai/dsh-client-ui-file-actions'
+    - id: ui-context-menu
+      name: '@deepseek-ai/dsh-client-ui-context-menu'
     - id: ui-open-in-app
       name: '@deepseek-ai/dsh-client-ui-open-in-app'
 
@@ -133,7 +144,7 @@
       name: '@deepseek-ai/dsh-api-workspace-files'
 
     # The Schedule service owns the task store and delivers each due occurrence
-    # as a follow-up in its original Session. The clock reading and the four
+    # as a follow-up to the task's target Session. The clock reading and the four
     # reminder tools belong to the `standard`, `cordis`, and `ptc` presets,
     # which declare them in their own scope.
     - id: schedule
@@ -189,14 +200,11 @@
 
     # Web glue owned by this bundle: resolves the built frontend dist (an
     # assembly fact of dsh-web-app, never user config), mounts the
-    # frontend-static fallback owner, registers the web-surface prompt
-    # section and the bash runtime variable, prints the URL line, and opens the
-    # canonical URL after the full Loader tree settles and the required-
-    # entry audit passes. Invocation-only values come from the webStartup
-    # provider; the advertised application URL is this row's `publicUrl`,
-    # otherwise the bind-address URL. A complete agent-preset persona
-    # suppresses the prompt section for that agent while retaining the
-    # host-owned shell variable.
+    # frontend-static fallback owner, registers the bash runtime variable,
+    # prints the URL line, and opens the canonical URL after the full Loader
+    # tree settles and the required-entry audit passes. Invocation-only values
+    # come from the webStartup provider; the advertised application URL is
+    # this row's `publicUrl`, otherwise the bind-address URL.
     - id: web-runtime
       name: '@deepseek-ai/dsh-web-app'
       inject: [webStartup]
@@ -205,6 +213,14 @@
         printUrl: true
         publicUrl: !!js ctx.webStartup.publicUrl
         surfaceContext: true
+
+    # Model context for an agent that inspects or extends the harness serving
+    # this GUI: value-free prompt sections plus the current checkout and GUI
+    # URL as optional runtime context. A complete agent-preset persona replaces
+    # the sections, and a persona that suppresses optional runtime context
+    # also drops the two value lines.
+    - id: harness-dev-context
+      name: '@deepseek-ai/dsh-harness-dev-context'
 
     # The client-plugin reload chain, always mounted: it is idle until a
     # rebuild watcher (pnpm run dev:web) actually rewrites client bundles. It
@@ -324,6 +340,9 @@
     - id: ui-approval
       name: '@deepseek-ai/dsh-client-ui-approval'
 
+    - id: message-quotes
+      name: '@deepseek-ai/dsh-message-quotes'
+
     - id: ui-chat
       name: '@deepseek-ai/dsh-client-ui-chat'
 
@@ -334,12 +353,18 @@
     - id: ui-attachment
       name: '@deepseek-ai/dsh-client-ui-attachment'
 
+    - id: ui-file-drag
+      name: '@deepseek-ai/dsh-client-ui-file-drag'
+
     # Tool call tree, generic fallback, and keyed business Tool views.
     - id: ui-tool
       name: '@deepseek-ai/dsh-client-ui-tool'
 
     - id: ui-cordis
       name: '@deepseek-ai/dsh-client-ui-cordis'
+
+    - id: deliverable-file-references
+      name: '@deepseek-ai/dsh-deliverable-file-references'
 
     # Turn tail: the changed-files card and delivery cards under each closing
     # assistant message. Remove this entry to turn the surface off; the tail
@@ -378,6 +403,10 @@
     - id: ui-reference
       name: '@deepseek-ai/dsh-client-ui-reference'
 
+    # Display masking for recognized credentials in sent user text; remove
+    # this entry to draw credentials as written.
+    - id: ui-secret-mask
+      name: '@deepseek-ai/dsh-client-ui-secret-mask'
 
     # Background jobs: the session-header roster with on-demand streaming
     # record panels over the session job-output service.
@@ -410,6 +439,11 @@
     # sessions created later. Absent a roster it renders nothing.
     - id: ui-agent-preset
       name: '@deepseek-ai/dsh-client-ui-agent-preset'
+
+    # Region-local More menus: pin or unpin plugin launchers and start a
+    # plugin draft.
+    - id: entry-customization
+      name: '@deepseek-ai/dsh-client-ui-entry-customization'
 
     - id: ui-settings-session-log
       name: '@deepseek-ai/dsh-client-ui-settings-session-log'
