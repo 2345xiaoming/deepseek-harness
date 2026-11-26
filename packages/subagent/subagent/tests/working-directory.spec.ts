@@ -9,7 +9,7 @@ import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import * as Spawn from '@deepseek-ai/dsh-subagent-spawn-in-process'
 import * as Fork from '@deepseek-ai/dsh-subagent-fork-in-process'
 import { MockAdapter, textResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
@@ -71,7 +71,7 @@ describe('subagent working directories', () => {
     const started = await ctx.subagents.startActivation({
       delivery: 'caller',
       provider: 'spawn', label: 'directory child',
-      request: { parent, cwd: form === 'absolute' ? second : 'second', prompt: [{ type: 'text', text: 'child' }] },
+      parent, cwd: form === 'absolute' ? second : 'second', prompt: [{ type: 'text', text: 'child' }],
       signal: new AbortController().signal,
     })
     await vi.waitFor(() => { expect(ctx.agents.get(started.childId)).toBeUndefined() })
@@ -99,7 +99,7 @@ describe('subagent working directories', () => {
       await expect(ctx.subagents.startActivation({
         delivery: 'caller',
         provider: 'spawn', label: 'unavailable directory service', childId,
-        request: { parent, cwd: second, prompt: [{ type: 'text', text: 'child' }] },
+        parent, cwd: second, prompt: [{ type: 'text', text: 'child' }],
         signal: new AbortController().signal,
       })).rejects.toThrow(/subagents require the working-directory service/)
 

@@ -1,0 +1,8 @@
+# @dsh-external/dsh-open-code-review bundle 层：插入 OpenCodeReview 评审工具行。
+# 确定性部分（选文件 / 规则解析 / 打包 / 定位校验）在进程内同步执行；
+# 评审 worker 走宿主的 subagent runtime（spawn 隔离子 agent）或观测到的 LLM 路由。
+# 全部字段均可由上层 profile patch 覆盖（见 README § 配置）。
+- insert:
+    - id: dsh-open-code-review
+      name: '@dsh-external/dsh-open-code-review'
+      config: {}

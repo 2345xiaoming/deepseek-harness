@@ -39,10 +39,9 @@ describe('Codex provider public Loader composition', () => {
           name: 'codex',
           capabilities: {
             agentOptions: false,
+            agentPreset: false,
             outputSchema: false,
             depthLimit: false,
-            toolFilter: false,
-            persona: false,
           },
           inheritsParentContext: false,
         },
@@ -50,10 +49,9 @@ describe('Codex provider public Loader composition', () => {
           name: 'codex-primary',
           capabilities: {
             agentOptions: false,
+            agentPreset: false,
             outputSchema: false,
             depthLimit: false,
-            toolFilter: false,
-            persona: false,
           },
           inheritsParentContext: false,
         },
@@ -61,10 +59,9 @@ describe('Codex provider public Loader composition', () => {
           name: 'codex-secondary',
           capabilities: {
             agentOptions: false,
+            agentPreset: false,
             outputSchema: false,
             depthLimit: false,
-            toolFilter: false,
-            persona: false,
           },
           inheritsParentContext: false,
         },
@@ -72,17 +69,17 @@ describe('Codex provider public Loader composition', () => {
       tools: [
         {
           name: 'subagent_codex',
-          parameterNames: ['cwd', 'description', 'prompt'],
+          parameterNames: ['cwd', 'description', 'name', 'prompt'],
           required: ['description', 'prompt'],
         },
         {
           name: 'subagent_codex_primary',
-          parameterNames: ['cwd', 'description', 'prompt'],
+          parameterNames: ['cwd', 'description', 'name', 'prompt'],
           required: ['description', 'prompt'],
         },
         {
           name: 'subagent_codex_secondary',
-          parameterNames: ['cwd', 'description', 'prompt'],
+          parameterNames: ['cwd', 'description', 'name', 'prompt'],
           required: ['description', 'prompt'],
         },
       ],

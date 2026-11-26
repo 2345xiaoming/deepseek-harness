@@ -1,0 +1,8 @@
+# @dsh-external/dsh-mcp-settings bundle layer: mounts the MCP server manager
+# plugin. The manager reads the `mcp-servers` settings namespace as its only
+# source of truth and mounts one dsh-mcp-client fiber per enabled entry at
+# runtime, so this row itself carries no config.
+- insert:
+    - id: dsh-mcp-settings
+      name: '@dsh-external/dsh-mcp-settings'
+      config: {}

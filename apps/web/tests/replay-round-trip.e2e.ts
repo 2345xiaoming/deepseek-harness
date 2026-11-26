@@ -1,3 +1,4 @@
+import { executeToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 // Web e2e scenario: fresh round trip. A real chromium types a prompt into the
 // real composer; the wire, Remote gateway, agent loop, and the REAL bash tool (echo
 // in the temp workspace) all run; the model adapter is dsh-llm-replay (keyless)
@@ -19,7 +20,7 @@ import type { Browser, Page, Route, WebSocketRoute } from 'playwright'
 import { chromium } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { ToolCallId, expandAssistantStream } from '@deepseek-ai/dsh-llm'
-import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
+import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SessionListValue } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import {
@@ -123,14 +124,24 @@ describe('web e2e: fresh round trip through the real assembly', () => {
     let accepted = false
     try {
       await input.fill(PROMPT)
+      // Hold the prompt POST at the browser boundary so the Host cannot accept
+      // the message before the pre-accept snapshot is read.
+      const promptSent = Promise.withResolvers<undefined>()
+      const releasePrompt = Promise.withResolvers<undefined>()
+      const holdPrompt = async (route: Route): Promise<void> => {
+        promptSent.resolve(undefined)
+        await releasePrompt.promise
+        await route.continue()
+      }
+      await page.route('**/api/session/prompt', holdPrompt, { times: 1 })
       const admitted = page.waitForResponse('**/api/session/prompt')
-      const [echoSnapshot, response] = await Promise.all([
-        input.evaluate(async (element, prompt) => {
+      try {
+        const echoCapture = input.evaluate(async (element, prompt) => {
           element.dispatchEvent(new KeyboardEvent('keydown', {
             key: 'Enter', code: 'Enter', bubbles: true, cancelable: true,
           }))
-          // sendSession registered its paint yield first. This frame observes the
-          // committed echo while admission remains queued on the following task.
+          // sendSession registered its paint yield first; this frame observes the
+          // composer holding the message while the POST is still held.
           await new Promise<void>((resolve) => { requestAnimationFrame(() => { resolve() }) })
           const echo = document.querySelector<HTMLElement>('[data-submission-echo]')
           return [
@@ -138,12 +149,19 @@ describe('web e2e: fresh round trip through the real assembly', () => {
             `composer: ${JSON.stringify(element.textContent ?? '')}`,
             `contenteditable: ${element.getAttribute('contenteditable')}`,
           ].join('\n')
-        }, PROMPT),
-        admitted,
-      ])
+        }, PROMPT)
+        await promptSent.promise
+        await compareOrRefreshGolden(ECHO_EXPECTED, await echoCapture, MODE)
+      } finally {
+        releasePrompt.resolve(undefined)
+      }
+      const response = await admitted
       expect(await response.json()).toMatchObject({ result: { ok: true, value: { accepted: true } } })
       accepted = true
-      await compareOrRefreshGolden(ECHO_EXPECTED, echoSnapshot, MODE)
+      // Acceptance publishes the echo and clears the composer; maintenance keeps the Turn from starting.
+      await page.locator('[data-submission-echo]', { hasText: PROMPT }).waitFor()
+      await expect.poll(() => input.textContent()).toBe('')
+      expect(await input.getAttribute('contenteditable')).toBe('true')
       const row = page.getByRole('tree', { name: 'Sessions', exact: true })
         .locator('[role="treeitem"][aria-selected="true"]')
       await expect.poll(() => row.getAttribute('draggable'), { timeout: 5_000 }).toBe('true')
@@ -213,7 +231,7 @@ describe('web e2e: fresh round trip through the real assembly', () => {
     }
   }, 200_000)
 
-  it('keeps source checkout and Web context in the system prompt and cwd in user context', async () => {
+  it('keeps value-free Web guidance in the system prompt and process values in runtime context', async () => {
     if (settledSessionId === undefined) throw new Error('the drive turn did not publish a session id')
     const agent = scaffold.ctx.agents.get(settledSessionId)
     if (agent === undefined) throw new Error(`the settled Web agent ${settledSessionId} is no longer live`)
@@ -230,6 +248,8 @@ describe('web e2e: fresh round trip through the real assembly', () => {
     const userText = agent.session.deriveMessages().filter(message => message.role === 'user')
       .flatMap(message => message.content.flatMap(block => block.type === 'text' ? [block.text] : []))
     expect(userText.some(text => text.includes(`Current working directory: ${JSON.stringify(cwd)}.`))).toBe(true)
+    expect(system).not.toContain(scaffold.baseUrl)
+    expect(userText.some(text => text.includes(`Current DeepSeek Harness Web GUI URL: ${JSON.stringify(scaffold.baseUrl)}.`))).toBe(true)
     const suffix = paragraphs.slice(-2).join('\n\n')
       .split(REPO_ROOT).join('{{sourceRoot}}')
       .split(join(scaffold.workspaceCwd, 'workspace')).join('{{cwd}}')
@@ -238,22 +258,34 @@ describe('web e2e: fresh round trip through the real assembly', () => {
   })
 
   it('exposes the assembled Web URL to the real bash tool', async () => {
-    if (settledSessionId === undefined) throw new Error('the drive turn did not publish a session id')
-    const agent = scaffold.ctx.agents.get(settledSessionId)
-    if (agent === undefined) throw new Error(`the settled Web agent ${settledSessionId} is no longer live`)
-    const result = await scaffold.ctx.tools.execute({
-      signal: AbortSignal.timeout(5_000),
-      callId: ToolCallId('web-url-probe'),
-      name: 'bash',
-      arguments: {
-        command: 'printf \'%s\\n\' "$DSH_WEB_URL"',
-        description: 'Print current Web runtime',
-      },
-      agent,
-    })
-    expect(result.isError).toBe(false)
-    expect(result.content.filter(block => block.type === 'text').map(block => block.text).join(''))
-      .toBe(`${scaffold.baseUrl}\n`)
+    // This host probe records job events too; keep it out of the shared
+    // conversation fixture that other browser scenarios replay.
+    const probe = await launchWebScaffold()
+    try {
+      const handle = await probe.ctx.agents.create({
+        sessionId: SessionId('web-url-probe'),
+        setup: agentCtx => probe.ctx.agentPresets.mount(agentCtx).then(() => undefined),
+      })
+      try {
+        const result = await executeToolFixture(probe.ctx, {
+          signal: AbortSignal.timeout(5_000),
+          callId: ToolCallId('web-url-probe'),
+          name: 'bash',
+          arguments: {
+            command: 'printf \'%s\\n\' "$DSH_WEB_URL"',
+            description: 'Print current Web runtime',
+          },
+          agent: handle.agent,
+        })
+        expect(result.isError).toBe(false)
+        expect(result.content.filter(block => block.type === 'text').map(block => block.text).join(''))
+          .toBe(`${probe.baseUrl}\n`)
+      } finally {
+        await handle.dispose()
+      }
+    } finally {
+      await probe.close()
+    }
   })
 
   it.skipIf(MODE === 'record')('rendered the settled turn: markdown, tool row, composer restore', async () => {

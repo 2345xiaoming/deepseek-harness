@@ -55,7 +55,7 @@ kind: "package-reference"
 
 ### 一次 fork 委派会做什么
 
-一次工具调用创建后台子 agent 并立即返回子会话 ID。子级在自己的会话中工作，父级通过完成通知收到其最终答案。子级也可以通过 `send_message` 发送消息。被拒绝的启动不会留下已发布的子 agent；工作流等程序调用方可以直接等待 activation 的结果。
+一次工具调用创建后台子 agent 并立即返回其名称。子级在自己的会话中工作，父级通过完成通知收到其最终答案。子级也可以通过 `send_message` 发送消息。被拒绝的启动不会留下已发布的子 agent；工作流等程序调用方可以直接等待 activation 的结果。
 
 -----
 
@@ -79,11 +79,11 @@ kind: "package-reference"
 
 ### 运行流程
 
-`prepareContinuable()` 在创建时捕获一次父级已完成轮次前缀。`startActivation()` 以此创建子 agent，并由 subagent 服务应用 persona、工具过滤与本次 activation 的结构化输出设置。提供方声明与 spawn 相同的 `agentOptions`、输出、深度、过滤及 persona 能力。
+`prepareContinuable()` 在创建时捕获一次父级已完成轮次前缀。`startActivation()` 以此创建子 agent，由 subagent 服务组装继承的 preset 和可选的结构化输出。提供方声明 agent 选项、输出及深度能力；不支持独立选择 preset。
 
 ### 生命周期绑定
 
-委派工具以后台 activation 创建子级，并返回稳定的子会话 ID。父级与子级共享相同的消息工具定义及顺序；父级 ID 与返回指导位于继承历史之后的初始任务中。工作流以调用方收集模式等待结果，不向父级发送完成通知。
+委派工具以后台 activation 创建子级，并返回子级名称。父级与子级共享相同的消息工具定义及顺序；身份运行时上下文中的父级名称和初始任务中的返回指导都位于继承历史之后。工作流以调用方收集模式等待结果，不向父级发送完成通知。
 
 </details>
 
@@ -109,21 +109,21 @@ kind: "package-reference"
 
 #### 模型看到什么
 
-子 agent 先接收由父级已配平的已完成轮次构成的前缀，再逐字接收新的任务内容。配置的 persona 会在子 agent 的全新作用域中遮蔽提示词文本；工具限制会过滤其全局协议 schema、可执行工具查找与 PTC mode SDK 绑定，但不影响独立指导内容。父级的工具视图与权限不会被继承；可选的结构化输出请求会添加仅属于子 agent 的约定；父级当前进行中的轮次会被排除。
+子 agent 先接收由父级已配平的已完成轮次构成的前缀，再逐字接收新的任务内容。它加入父级的 preset 代际，由 preset 提供 persona 和工具。父级 agent 局部限制不会被复制。可选的结构化输出请求会添加仅属于子 agent 的工具；父级当前进行中的轮次会被排除。
 
 #### Token 影响
 
-fork 会把保留的已完成历史复制到子 agent 的请求中，子 agent 随后独立累积自己的 token。persona 会改变重复提示词的成本；过滤会改变 schema 或生成 SDK 的成本；首轮 fork 没有继承历史。
+fork 会把保留的已完成历史复制到子 agent 的请求中，子 agent 随后独立累积自己的 token。首轮 fork 没有继承历史。
 
 #### KV Cache 影响
 
-在提供方与模型相同的前提下，子 agent 可以复用继承的逐字节相同前缀。persona、工具过滤、生成 SDK 或路由变化可能在继承历史之前使复用失效；后续子 agent 历史仅追加。可继续消息不会增加子级专属的系统提示词区段或工具 schema；父级 ID 与返回指导在初始用户任务中位于继承历史之后（见[保持 fork 缓存的 Agent Note](../../../.agents/notes/implemented/architecture/2026-08-10-fork-children-stay-one-shot.zh.md)）。
+在提供方与模型相同的前提下，子 agent 可以复用继承的逐字节相同前缀。结构化输出、生成 SDK、路由变化，或冷恢复时的历史 descriptor 覆盖，可能在继承历史之前使复用失效；后续子 agent 历史仅追加。可继续消息不会增加子级专属的系统提示词区段或工具 schema；父级 ID 与返回指导在初始用户任务中位于继承历史之后（见[保持 fork 缓存的 Agent Note](../../../.agents/notes/implemented/architecture/2026-08-10-fork-children-stay-one-shot.zh.md)）。
 
 ### 父级工具结果（间接）
 
 #### 模型看到什么
 
-父级通过 `dsh-tool-subagent` 先收到子会话 ID，随后收到包含最终答案的完成通知。子级自行编写的消息通过 `send_message` 到达；继承的前缀与内部工作保留在子会话中。
+父级通过 `dsh-tool-subagent` 先收到子级名称，随后收到包含最终答案的完成通知。子级自行编写的消息通过 `send_message` 到达；继承的前缀与内部工作保留在子会话中。
 
 #### Token 影响
 
@@ -141,7 +141,7 @@ fork 会把保留的已完成历史复制到子 agent 的请求中，子 agent �
 这些限制说明何时选择该后端是错误的；它们是当前包约束。
 
 - **初始内容是一次性快照**——子 agent 只能看到 fork 时父级已完成的轮次，看不到父级此后记录的任何内容；不会实时共享上下文。
-- **前缀复用取决于请求输入是否匹配**——父级与子级的消息定义都逐字节相同；显式 persona、工具过滤、生成 SDK 或路由变化仍可破坏相等性。理由见[保持 fork 缓存的 Agent Note](../../../.agents/notes/implemented/architecture/2026-08-10-fork-children-stay-one-shot.zh.md)。
+- **前缀复用取决于请求输入是否匹配**——父级与子级的消息定义都逐字节相同；结构化输出、生成 SDK、路由变化或恢复的历史覆盖仍可破坏相等性。理由见[保持 fork 缓存的 Agent Note](../../../.agents/notes/implemented/architecture/2026-08-10-fork-children-stay-one-shot.zh.md)。
 - **随附 fork 工具不公开子级 LLM（大语言模型）路由选择**——它们继承父级提供方与模型，使复制的历史仍有资格复用 KV Cache。在某项改动能保留复用或公开有界重算成本前，路由选择保持禁用。
 
 <a id="dev-note"></a>

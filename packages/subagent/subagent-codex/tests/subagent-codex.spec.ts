@@ -438,16 +438,15 @@ describe('task admission and package contracts', () => {
     expect(provider).toMatchObject({
       name: 'codex',
       capabilities: {
+        agentPreset: false,
         outputSchema: false,
         depthLimit: false,
-        toolFilter: false,
-        persona: false,
       },
       inheritsParentContext: false,
     })
-    expect(ctx.subagents.list()).toEqual(['codex'])
+    expect(ctx.subagents.getProvider('codex')).toBeDefined()
     await fiber.dispose()
-    expect(ctx.subagents.list()).toEqual([])
+    expect(ctx.subagents.getProvider('codex')).toBeUndefined()
 
     for (const disposeGraceMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       await expect(ctx.plugin(codex, { disposeGraceMs }))
@@ -495,7 +494,8 @@ describe('task admission and package contracts', () => {
       permissionMode: 'dangerously-bypass-approvals-and-sandbox',
       disposeGraceMs: 29,
     })
-    expect(ctx.subagents.list()).toEqual(['codex-safe', 'codex-bypass'])
+    expect(ctx.subagents.getProvider('codex-safe')).toBeDefined()
+    expect(ctx.subagents.getProvider('codex-bypass')).toBeDefined()
     expect(added).toEqual(['codex-safe', 'codex-bypass'])
 
     const safeController = new AbortController()
@@ -522,7 +522,8 @@ describe('task admission and package contracts', () => {
       bypassStarting,
     ])
     await safeFiber.dispose()
-    expect(ctx.subagents.list()).toEqual(['codex-bypass'])
+    expect(ctx.subagents.getProvider('codex-bypass')).toBeDefined()
+    expect(ctx.subagents.getProvider('codex-safe')).toBeUndefined()
     expect(removed).toEqual(['codex-safe'])
     await expect(startExternalActivation(ctx, 'codex-safe', request()))
       .rejects.toMatchObject({ code: 'NO_PROVIDER' })
@@ -577,7 +578,6 @@ describe('task admission and package contracts', () => {
       permissionMode: 'dangerously-bypass-approvals-and-sandbox',
     })).rejects.toMatchObject({ code: 'DUPLICATE_PROVIDER' })
     expect(ctx.subagents.getProvider('codex-duplicate')).toBe(first)
-    expect(ctx.subagents.list()).toEqual(['codex-duplicate'])
     await firstFiber.dispose()
     await ctx.fiber.dispose()
   })
@@ -822,6 +822,55 @@ describe('CodexAppServerWire', () => {
     wire.close()
   })
 
+  it('ranks final_answer above partial_answer above nullable-phase answers and never selects commentary', async () => {
+    const scenarios: Array<{
+      readonly frames: JsonObject[]
+      readonly text: string
+    }> = [
+      {
+        frames: [
+          agentMessage('partial', 'partial_answer'),
+          agentMessage('final', 'final_answer'),
+        ],
+        text: 'final',
+      },
+      {
+        frames: [
+          agentMessage('final', 'final_answer'),
+          agentMessage('partial after final', 'partial_answer'),
+        ],
+        text: 'final',
+      },
+      {
+        frames: [agentMessage('only partial', 'partial_answer')],
+        text: 'only partial',
+      },
+      {
+        frames: [
+          agentMessage('unphased', null),
+          agentMessage('commentary before partial', 'commentary'),
+          agentMessage('first partial', 'partial_answer'),
+          agentMessage('last partial', 'partial_answer'),
+          agentMessage('commentary after partial', 'commentary'),
+          agentMessage('unphased after partial', null),
+        ],
+        text: 'last partial',
+      },
+    ]
+    for (const scenario of scenarios) {
+      const { child, wire } = await initializeWire()
+      const result = wire.runTurn(['task'], new AbortController().signal)
+      const turnStart = await child.peer.nextMethod('turn/start')
+      child.peer.respond(turnStart, { turn: { id: 'turn-1' } })
+      child.peer.send(...scenario.frames, turnCompleted('completed'))
+      await expect(result).resolves.toEqual({
+        output: [{ type: 'text', text: scenario.text }],
+        stopReason: 'completed',
+      })
+      wire.close()
+    }
+  })
+
   it('groups representative string errors without changing stop reasons', async () => {
     const scenarios = [
       ['contextWindowExceeded', 'limit', 'max-tokens'],
@@ -959,7 +1008,7 @@ describe('CodexAppServerWire', () => {
     }> = [
       {
         frames: [turnCompleted('completed')],
-        message: 'without a final answer',
+        message: 'without an answer',
         category: 'invalid-result',
       },
       {
@@ -968,7 +1017,7 @@ describe('CodexAppServerWire', () => {
           agentMessage(' \n ', 'final_answer'),
           turnCompleted('completed'),
         ],
-        message: 'without a final answer',
+        message: 'without an answer',
         category: 'invalid-result',
       },
       {

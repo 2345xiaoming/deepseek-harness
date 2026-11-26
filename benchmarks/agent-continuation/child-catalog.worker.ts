@@ -5,7 +5,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { provideWorkingDirectoryFixture } from '@deepseek-ai/dsh-agent-loop-testkit'
 import SessionStore, { SESSION_FORMAT_VERSION, SessionId, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SessionQueryEngine from '@deepseek-ai/dsh-session-query'
 import SubagentRuntime, { SUBAGENT_DESCRIPTOR_VERSION } from '@deepseek-ai/dsh-subagent'
@@ -81,7 +81,12 @@ async function run(root: string, mode: string): Promise<CatalogReport | { seeded
       await seed(ctx)
       return { seeded: true }
     }
-    const readCatalog = () => ctx.subagents.listChildren(PARENT_ID)
+    const readCatalog = async () => {
+      using observation = await ctx.sessionQuery.observeSession(PARENT_ID)
+      const catalog = observation.projections?.values.subagentCatalog
+      if (catalog === undefined) throw new Error('child-catalog projection is unavailable')
+      return catalog
+    }
     const cpuStart = process.cpuUsage()
     const start = performance.now()
     const first = await readCatalog()

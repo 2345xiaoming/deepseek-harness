@@ -1,0 +1,35 @@
+dsh-open-code-review
+Copyright 2026 DeepSeek
+
+This product includes software developed by the alibaba/open-code-review
+project (https://github.com/alibaba/open-code-review), licensed under the
+Apache License, Version 2.0:
+
+    Copyright 2026 alibaba/open-code-review Contributors
+
+The following material is derived from that project (Apache-2.0):
+
+- src/assets/rule-docs.ts — the complete built-in per-language review
+  ruleset (54 rule documents) and its file-pattern map, ported verbatim
+  from internal/config/rules/rule_docs and internal/config/rules/
+  system_rules.json. Adaptation: embedded as TypeScript constants.
+- src/prompts.ts — the review and reflection prompt bodies (role,
+  capabilities, focus rules, Ground A/B removal criteria, protected-subject
+  vetoes), ported from internal/config/template/prompts. Adaptation: the
+  upstream tool-call protocol (`code_comment` / `task_done` /
+  `report_incorrect_comments`) is replaced by one structured JSON document.
+- src/rules.ts — layered rule resolution and the system/user merge template
+  ("## System-Specific Rules (Mandatory)" …), ported from
+  internal/config/rules/system_rules.go. Adaptation: rewritten in
+  TypeScript; the `include`/`exclude` filters are implemented against this
+  plugin's exclusion list.
+- src/pipeline.ts, src/bundle.ts, src/relocate.ts, src/git.ts — the review
+  architecture (isolated per-bundle review units, file bundling heuristics,
+  comment relocation, deterministic selection) reimplemented in TypeScript
+  from the behavior described by the upstream documentation and delegate
+  mode; no upstream Go source is compiled or transcribed.
+- The model-facing guidance in src/index.ts is adapted from the upstream
+  skills/open-code-review*/SKILL.md triage rubric.
+
+Modifications are stated per file above and in the repository history.
+Licensed under the Apache License, Version 2.0 (see LICENSE).

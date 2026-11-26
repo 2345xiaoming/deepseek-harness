@@ -42,14 +42,17 @@ export function resolveLaunch(config?: LaunchConfig): LaunchConfig {
  */
 export function bootstrapArgs(fs: Pick<FileSystem, 'processPathFromHostPath'>, config: LaunchConfig, maxMessageBytes: number): string[] {
   switch (config.kind) {
-    case 'embedded': return [String(maxMessageBytes)]
-    case 'node-script': return scriptBootstrapArgs(fs, config.bootstrapPath, maxMessageBytes)
+    case 'embedded':
+      return [String(maxMessageBytes)]
+    case 'node-script': return ['--experimental-vm-modules', ...scriptBootstrapArgs(fs, config.bootstrapPath, maxMessageBytes)]
     /* v8 ignore next -- Callers supply the resolved, closed LaunchConfig union. */
     default: return assertNever(config)
   }
 }
 
-function scriptBootstrapArgs(fs: Pick<FileSystem, 'processPathFromHostPath'>, bootstrapPath: string | undefined, maxMessageBytes: number): string[] {
+function scriptBootstrapArgs(
+  fs: Pick<FileSystem, 'processPathFromHostPath'>, bootstrapPath: string | undefined, maxMessageBytes: number,
+): string[] {
   if (bootstrapPath !== undefined) return [bootstrapPath, String(maxMessageBytes)]
   const mapped = (path: string): string => {
     const result = fs.processPathFromHostPath(path)

@@ -185,23 +185,23 @@ describe('dsh-subagent-fork-in-process', () => {
     const { ctx } = await setup([])
     expect(ctx.subagents.getProvider('fork')!.capabilities).toEqual({
       agentOptions: true,
+      agentPreset: false,
       outputSchema: true,
       depthLimit: true,
-      toolFilter: true,
-      persona: true,
     })
   })
 
   it('unregisters the provider when its fiber is disposed (HMR safety)', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionProjectionRegistry)
+
     await mountWorkingDirectoryFixture(ctx)
     await ctx.plugin(SubagentRuntime)
     await ctx.plugin(AgentRegistry)
     const fiber = await ctx.plugin(fork, { providerName: 'fork' })
-    expect(ctx.subagents.list()).toEqual(['fork'])
+    expect(ctx.subagents.getProvider('fork')).toBeDefined()
     await fiber.dispose()
-    expect(ctx.subagents.list()).toEqual([])
+    expect(ctx.subagents.getProvider('fork')).toBeUndefined()
   })
 
   it('contributes the completed-turn prefix as a continuable child\'s seed', async () => {
